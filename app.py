@@ -185,10 +185,13 @@ def edit_evidence(pid,eid):
 @app.delete('/api/projects/<int:pid>')
 def delete_project(pid):
  c=conn();ensure_compliance(c)
+ if not project(c,pid):return jsonify(error='找不到專案'),404
  c.execute("CREATE TABLE IF NOT EXISTS ai_suggestions(project INTEGER,code TEXT,assessment TEXT,support TEXT,gap TEXT,request_text TEXT,evidence_ids TEXT,model TEXT,updated TEXT,PRIMARY KEY(project,code))")
  c.execute('DELETE FROM original_files WHERE source IN (SELECT id FROM sources WHERE project=?)',(pid,))
  for t in ('evidence','sources','drafts','requests','clause_reviews','ai_suggestions'):c.execute(f'DELETE FROM {t} WHERE project=?',(pid,))
- c.execute('DELETE FROM projects WHERE id=?',(pid,));c.commit();return jsonify(ok=True)
+ r=c.execute('DELETE FROM projects WHERE id=?',(pid,));c.commit()
+ if not r.rowcount:return jsonify(error='找不到專案'),404
+ return jsonify(ok=True)
 @app.post('/api/projects/<int:pid>/generate')
 def gen(pid):
  c=conn();return jsonify(updated=generate(c,pid))
