@@ -85,10 +85,14 @@ def db(path):
  c.executescript('''CREATE TABLE IF NOT EXISTS projects(id INTEGER PRIMARY KEY,name TEXT,industry TEXT,year TEXT,created TEXT);
  CREATE TABLE IF NOT EXISTS sources(id INTEGER PRIMARY KEY,project INTEGER,name TEXT,sha TEXT,created TEXT);
  CREATE TABLE IF NOT EXISTS evidence(id INTEGER PRIMARY KEY,project INTEGER,source INTEGER,location TEXT,body TEXT,sections TEXT,confidence REAL,category TEXT);
- CREATE TABLE IF NOT EXISTS drafts(project INTEGER,section TEXT,body TEXT,confirmed INTEGER DEFAULT 0,updated TEXT,PRIMARY KEY(project,section));''');return c
+ CREATE TABLE IF NOT EXISTS drafts(project INTEGER,section TEXT,body TEXT,confirmed INTEGER DEFAULT 0,updated TEXT,PRIMARY KEY(project,section));''')
+ cols=[r[1] for r in c.execute('PRAGMA table_info(sources)')]
+ if 'status' not in cols:c.execute("ALTER TABLE sources ADD COLUMN status TEXT DEFAULT 'yellow'")
+ if 'note' not in cols:c.execute("ALTER TABLE sources ADD COLUMN note TEXT DEFAULT ''")
+ c.commit();return c
 
 def generate(c,pid):
- evidence=c.execute('SELECT e.*,s.name filename FROM evidence e JOIN sources s ON s.id=e.source WHERE e.project=?',(pid,)).fetchall();made=0
+ evidence=c.execute("SELECT e.*,s.name filename FROM evidence e JOIN sources s ON s.id=e.source WHERE e.project=? AND COALESCE(s.status, 'yellow')='green'",(pid,)).fetchall();made=0
  for chapter,(heading,subs) in SECTIONS.items():
   for i,title in enumerate(subs,1):
    key=f'{chapter}.{i}'; existing=c.execute('SELECT confirmed FROM drafts WHERE project=? AND section=?',(pid,key)).fetchone()
