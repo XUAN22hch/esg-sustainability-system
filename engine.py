@@ -80,16 +80,11 @@ def extract(filename,data):
    if piece:result.append((loc+(f' 片段 {i//2600+1}' if len(t)>2600 else ''),piece))
  return result
 
-def db(path):
- c=sqlite3.connect(path);c.row_factory=sqlite3.Row
- c.executescript('''CREATE TABLE IF NOT EXISTS projects(id INTEGER PRIMARY KEY,name TEXT,industry TEXT,year TEXT,created TEXT);
- CREATE TABLE IF NOT EXISTS sources(id INTEGER PRIMARY KEY,project INTEGER,name TEXT,sha TEXT,created TEXT);
- CREATE TABLE IF NOT EXISTS evidence(id INTEGER PRIMARY KEY,project INTEGER,source INTEGER,location TEXT,body TEXT,sections TEXT,confidence REAL,category TEXT);
- CREATE TABLE IF NOT EXISTS drafts(project INTEGER,section TEXT,body TEXT,confirmed INTEGER DEFAULT 0,updated TEXT,PRIMARY KEY(project,section));''')
- cols=[r[1] for r in c.execute('PRAGMA table_info(sources)')]
- if 'status' not in cols:c.execute("ALTER TABLE sources ADD COLUMN status TEXT DEFAULT 'yellow'")
- if 'note' not in cols:c.execute("ALTER TABLE sources ADD COLUMN note TEXT DEFAULT ''")
- c.commit();return c
+def db(path=None):
+ if os.environ.get('DATABASE_URL'):
+  from persistent_db import connect
+  return connect()
+ raise RuntimeError('尚未設定 DATABASE_URL：為避免資料遺失，已停用 Render 本機 SQLite。')
 
 def generate(c,pid):
  evidence=c.execute("SELECT e.*,s.name filename FROM evidence e JOIN sources s ON s.id=e.source WHERE e.project=? AND COALESCE(s.status, 'yellow')='green'",(pid,)).fetchall();made=0

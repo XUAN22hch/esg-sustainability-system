@@ -14,7 +14,6 @@ def access_control():
   if not auth or not secrets.compare_digest(auth.password or '',password):
    return Response('請輸入系統帳號密碼',401,{'WWW-Authenticate':'Basic realm="ESG Workspace"'})
 def conn():
- os.makedirs(os.path.dirname(os.path.abspath(DB)),exist_ok=True)
  return db(DB)
 def project(c,p):return c.execute('SELECT * FROM projects WHERE id=?',(p,)).fetchone()
 @app.get('/')
@@ -138,6 +137,11 @@ def upload(pid):
    c.execute('INSERT INTO evidence(project,source,location,body,sections,confidence,category) VALUES(?,?,?,?,?,?,?)',(pid,cur.lastrowid,loc,body,json.dumps(sections),confidence,category(body)))
   results.append({'file':name,'status':'已解析','chunks':len(chunks),'unclassified':sum(not classify(t,name)[0] for _,t in chunks)})
  c.commit();return jsonify(results=results)
+@app.get('/api/projects/<int:pid>/sources/<int:sid>/download')
+def download_original(pid,sid):
+ c=conn();r=c.execute('SELECT s.name,f.content,f.content_type FROM sources s JOIN original_files f ON f.source=s.id WHERE s.project=? AND s.id=?',(pid,sid)).fetchone()
+ if not r:return jsonify(error='原始檔不存在（舊版上傳的檔案未保存原件）'),404
+ return send_file(io.BytesIO(bytes(r['content'])),mimetype=r['content_type'] or 'application/octet-stream',as_attachment=True,download_name=r['name'])
 @app.post('/api/projects/<int:pid>/text')
 def add_text(pid):
  j=request.get_json(silent=True) or {};body=(j.get('body') or '').strip();name=(j.get('name') or '手動輸入文字').strip()[:180]
@@ -159,7 +163,12 @@ def edit_source(pid,sid):
  return jsonify(ok=True)
 @app.delete('/api/projects/<int:pid>/sources/<int:sid>')
 def delete_source(pid,sid):
- c=conn();c.execute('DELETE FROM evidence WHERE project=? AND source=?',(pid,sid));r=c.execute('DELETE FROM sources WHERE project=? AND id=?',(pid,sid));c.commit()
+ c=conn();exists=c.execute('SELECT 1 FROM sources WHERE project=? AND id=?',(pid,sid)).fetchone()
+ if not exists:return jsonify(error='找不到文件；資料可能已在先前部署時遺失，請重新整理'),404
+ c.execute('DELETE FROM original_files WHERE source=?',(sid,))
+ c.execute('DELETE FROM evidence WHERE project=? AND source=?',(pid,sid))
+ c.execute("UPDATE requests SET source_id=NULL,status='missing' WHERE project=? AND source_id=?",(pid,sid))
+ r=c.execute('DELETE FROM sources WHERE project=? AND id=?',(pid,sid));c.commit()
  if not r.rowcount:return jsonify(error='找不到文件'),404
  return jsonify(ok=True,warning='既有草稿可能仍包含刪除前的來源摘錄，請重新生成並人工檢查；已確認章節不會自動覆蓋。')
 @app.put('/api/projects/<int:pid>/evidence/<int:eid>/text')
@@ -177,6 +186,7 @@ def edit_evidence(pid,eid):
 def delete_project(pid):
  c=conn();ensure_compliance(c)
  c.execute("CREATE TABLE IF NOT EXISTS ai_suggestions(project INTEGER,code TEXT,assessment TEXT,support TEXT,gap TEXT,request_text TEXT,evidence_ids TEXT,model TEXT,updated TEXT,PRIMARY KEY(project,code))")
+ c.execute('DELETE FROM original_files WHERE source IN (SELECT id FROM sources WHERE project=?)',(pid,))
  for t in ('evidence','sources','drafts','requests','clause_reviews','ai_suggestions'):c.execute(f'DELETE FROM {t} WHERE project=?',(pid,))
  c.execute('DELETE FROM projects WHERE id=?',(pid,));c.commit();return jsonify(ok=True)
 @app.post('/api/projects/<int:pid>/generate')
