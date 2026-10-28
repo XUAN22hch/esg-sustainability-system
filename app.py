@@ -1,4 +1,6 @@
-import os,json,io,datetime,hashlib
+import os,json,io,datetime,hashlib,threading,time,logging
+from concurrent.futures import ThreadPoolExecutor
+from flask import g
 from flask import Flask,request,jsonify,send_file,render_template_string
 from werkzeug.utils import secure_filename
 from engine import *
@@ -14,14 +16,21 @@ def access_control():
   if not auth or not secrets.compare_digest(auth.password or '',password):
    return Response('請輸入系統帳號密碼',401,{'WWW-Authenticate':'Basic realm="ESG Workspace"'})
 def conn():
- return db(DB)
+ if not hasattr(g,'esg_conn'):
+  g.esg_conn=db(DB)
+ return g.esg_conn
+@app.teardown_appcontext
+def close_db(error=None):
+ c=g.pop('esg_conn',None)
+ if c is not None:
+  try:c.close()
+  except Exception:pass
 def project(c,p):return c.execute('SELECT * FROM projects WHERE id=?',(p,)).fetchone()
 @app.get('/')
 def home():return render_template_string(open(os.path.join(ROOT,'index.html'),encoding='utf-8').read())
 def ensure_compliance(c):
- c.executescript("""CREATE TABLE IF NOT EXISTS requests(project INTEGER,code TEXT,status TEXT DEFAULT 'missing',note TEXT DEFAULT '',source_id INTEGER,updated TEXT,PRIMARY KEY(project,code));
- CREATE TABLE IF NOT EXISTS clause_reviews(project INTEGER,code TEXT,status TEXT DEFAULT 'unreviewed',note TEXT DEFAULT '',source_ids TEXT DEFAULT '[]',updated TEXT,PRIMARY KEY(project,code));""")
- c.commit()
+ # persistent_db initializes schema once per worker; no per-request DDL.
+ return None
 
 @app.get('/api/projects/<int:pid>/compliance')
 def compliance(pid):
@@ -123,20 +132,102 @@ def get(pid):
   for i,sub in enumerate(subs,1):
    k=f'{ch}.{i}';ev=[e for e in evidence if k in e['sections']];dr=drafts.get(k,{});checks.append(dict(key=k,title=sub,evidence=len(ev),generated=bool(dr and not dr['body'].startswith('[待補充')),confirmed=bool(dr.get('confirmed')),needs_data=not bool(ev),needs_review=not bool(dr.get('confirmed'))))
  return jsonify(project=dict(p),sources=sources,evidence=evidence,drafts=drafts,checks=checks,structure=SECTIONS)
+_pool=ThreadPoolExecutor(max_workers=2,thread_name_prefix='esg-parse')
+_active=set()
+_active_lock=threading.Lock()
+
+def _process_source(job_id,pid,sid):
+ with _active_lock:
+  if job_id in _active:return
+  _active.add(job_id)
+ c=None
+ try:
+  c=db(DB)
+  c.execute("UPDATE processing_jobs SET status='processing',progress=10,message='正在擷取文件文字',updated=? WHERE id=?",(datetime.datetime.now().isoformat(),job_id));c.commit()
+  f=c.execute('SELECT s.name,o.content FROM sources s JOIN original_files o ON o.source=s.id WHERE s.id=? AND s.project=?',(sid,pid)).fetchone()
+  if not f:raise ValueError('找不到原始文件')
+  chunks=extract(f['name'],bytes(f['content']))
+  if not chunks:raise ValueError('文件沒有可擷取的文字，可能是掃描型 PDF，需 OCR 才能解析')
+  c.execute("UPDATE processing_jobs SET progress=55,message='正在分類與儲存證據',updated=? WHERE id=?",(datetime.datetime.now().isoformat(),job_id));c.commit()
+  # Delete partial evidence if worker retries after interruption
+  c.execute('DELETE FROM evidence WHERE project=? AND source=?',(pid,sid))
+  for loc,body in chunks:
+   sections,confidence=classify(body,f['name'])
+   c.execute('INSERT INTO evidence(project,source,location,body,sections,confidence,category) VALUES(?,?,?,?,?,?,?)',(pid,sid,loc,body,json.dumps(sections),confidence,category(body)))
+  c.execute("UPDATE processing_jobs SET status='done',progress=100,message=?,updated=? WHERE id=?",(f'已完成，共 {len(chunks)} 個文字片段',datetime.datetime.now().isoformat(),job_id));c.commit()
+ except Exception as exc:
+  app.logger.exception('Document processing failed')
+  if c is not None:
+   try:
+    c.rollback();c.execute("UPDATE processing_jobs SET status='error',message=?,updated=? WHERE id=?",(str(exc)[:500],datetime.datetime.now().isoformat(),job_id));c.commit()
+   except Exception:app.logger.exception('Failed to record job error')
+ finally:
+  if c is not None:c.close()
+  with _active_lock:_active.discard(job_id)
+
+def _process_ai(job_id,pid):
+ with _active_lock:
+  if job_id in _active:return
+  _active.add(job_id)
+ c=None
+ try:
+  c=db(DB)
+  c.execute("UPDATE processing_jobs SET status='processing',progress=20,message='正在分析 IFRS S1/S2 證據',updated=? WHERE id=?",(datetime.datetime.now().isoformat(),job_id));c.commit()
+  p=project(c,pid)
+  if not p:raise ValueError('找不到專案')
+  from ai_review import analyze
+  evidence=[dict(x) for x in c.execute('SELECT e.id,e.location,e.body,s.name filename FROM evidence e JOIN sources s ON s.id=e.source WHERE e.project=? ORDER BY e.id',(pid,))]
+  items,model,count=analyze(evidence,p['industry'],p['year'])
+  for x in items:
+   c.execute('INSERT INTO ai_suggestions VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(project,code) DO UPDATE SET assessment=excluded.assessment,support=excluded.support,gap=excluded.gap,request_text=excluded.request_text,evidence_ids=excluded.evidence_ids,model=excluded.model,updated=excluded.updated',(pid,x['code'],x['assessment'],x['support'][:3000],x['gap'][:3000],x['request'][:3000],json.dumps(x['evidence_ids']),model,datetime.datetime.now().isoformat()))
+  c.execute("UPDATE processing_jobs SET status='done',progress=100,message=?,updated=? WHERE id=?",(f'已分析 {len(items)} 組條文、{count} 筆證據片段',datetime.datetime.now().isoformat(),job_id));c.commit()
+ except Exception as exc:
+  app.logger.exception('AI background analysis failed')
+  if c is not None:
+   try:c.rollback();c.execute("UPDATE processing_jobs SET status='error',message=?,updated=? WHERE id=?",(str(exc)[:400],datetime.datetime.now().isoformat(),job_id));c.commit()
+   except Exception:app.logger.exception('Failed to record AI job error')
+ finally:
+  if c is not None:c.close()
+  with _active_lock:_active.discard(job_id)
+
 @app.post('/api/projects/<int:pid>/upload')
 def upload(pid):
- c=conn();files=request.files.getlist('files');results=[]
+ c=conn()
+ if not project(c,pid):return jsonify(error='找不到專案'),404
+ files=request.files.getlist('files');results=[]
+ if not files:return jsonify(error='請先選擇檔案'),400
  for f in files:
   data=f.read();name=f.filename or 'unnamed';sha=hashlib.sha256(data).hexdigest()
-  if c.execute('SELECT 1 FROM sources WHERE project=? AND sha=?',(pid,sha)).fetchone():results.append({'file':name,'status':'重複檔案已略過'});continue
-  try:chunks=extract(name,data)
-  except Exception as e:results.append({'file':name,'error':str(e)});continue
+  if c.execute('SELECT 1 FROM sources WHERE project=? AND sha=?',(pid,sha)).fetchone():
+   results.append({'file':name,'status':'重複檔案已略過'});continue
   cur=c.execute('INSERT INTO sources(project,name,sha,created) VALUES(?,?,?,?)',(pid,name,sha,datetime.datetime.now().isoformat()))
-  for loc,body in chunks:
-   sections,confidence=classify(body,name)
-   c.execute('INSERT INTO evidence(project,source,location,body,sections,confidence,category) VALUES(?,?,?,?,?,?,?)',(pid,cur.lastrowid,loc,body,json.dumps(sections),confidence,category(body)))
-  results.append({'file':name,'status':'已解析','chunks':len(chunks),'unclassified':sum(not classify(t,name)[0] for _,t in chunks)})
- c.commit();return jsonify(results=results)
+  sid=cur.lastrowid
+  c.execute('INSERT INTO original_files(source,content,content_type,uploaded) VALUES(?,?,?,?)',(sid,data,f.mimetype,datetime.datetime.now().isoformat()))
+  job=c.execute('INSERT INTO processing_jobs(project,source,kind,status,progress,message,created,updated) VALUES(?,?,?,?,?,?,?,?) RETURNING id',(pid,sid,'upload','queued',0,'已保存原始檔，等待解析',datetime.datetime.now().isoformat(),datetime.datetime.now().isoformat()))
+  # psycopg adapter returns Result for explicit RETURNING
+  jid=job.fetchone()['id']
+  c.commit()
+  _pool.submit(_process_source,jid,pid,sid)
+  results.append({'file':name,'status':'已排入背景解析','job_id':jid})
+ return jsonify(results=results),202
+
+@app.get('/api/projects/<int:pid>/jobs/<int:jid>')
+def get_job(pid,jid):
+ c=conn();j=c.execute('SELECT id,kind,status,progress,message FROM processing_jobs WHERE project=? AND id=?',(pid,jid)).fetchone()
+ if not j:return jsonify(error='找不到工作'),404
+ return jsonify(dict(j))
+
+@app.post('/api/projects/<int:pid>/ai/start')
+def ai_start(pid):
+ c=conn()
+ if not project(c,pid):return jsonify(error='找不到專案'),404
+ if not c.execute('SELECT 1 FROM evidence WHERE project=? LIMIT 1',(pid,)).fetchone():return jsonify(error='請先上傳可解析文件'),400
+ running=c.execute("SELECT id FROM processing_jobs WHERE project=? AND kind='ai' AND status IN ('queued','processing') ORDER BY id DESC LIMIT 1",(pid,)).fetchone()
+ if running:return jsonify(job_id=running['id'],status='processing'),202
+ now=datetime.datetime.now().isoformat()
+ j=c.execute('INSERT INTO processing_jobs(project,kind,status,progress,message,created,updated) VALUES(?,?,?,?,?,?,?) RETURNING id',(pid,'ai','queued',0,'等待 AI 分析',now,now));jid=j.fetchone()['id'];c.commit()
+ _pool.submit(_process_ai,jid,pid)
+ return jsonify(job_id=jid,status='queued'),202
 @app.get('/api/projects/<int:pid>/sources/<int:sid>/download')
 def download_original(pid,sid):
  c=conn();r=c.execute('SELECT s.name,f.content,f.content_type FROM sources s JOIN original_files f ON f.source=s.id WHERE s.project=? AND s.id=?',(pid,sid)).fetchone()
@@ -165,6 +256,7 @@ def edit_source(pid,sid):
 def delete_source(pid,sid):
  c=conn();exists=c.execute('SELECT 1 FROM sources WHERE project=? AND id=?',(pid,sid)).fetchone()
  if not exists:return jsonify(error='找不到文件；資料可能已在先前部署時遺失，請重新整理'),404
+ c.execute('DELETE FROM processing_jobs WHERE source=?',(sid,))
  c.execute('DELETE FROM original_files WHERE source=?',(sid,))
  c.execute('DELETE FROM evidence WHERE project=? AND source=?',(pid,sid))
  c.execute("UPDATE requests SET source_id=NULL,status='missing' WHERE project=? AND source_id=?",(pid,sid))
@@ -187,6 +279,7 @@ def delete_project(pid):
  c=conn();ensure_compliance(c)
  if not project(c,pid):return jsonify(error='找不到專案'),404
  c.execute("CREATE TABLE IF NOT EXISTS ai_suggestions(project INTEGER,code TEXT,assessment TEXT,support TEXT,gap TEXT,request_text TEXT,evidence_ids TEXT,model TEXT,updated TEXT,PRIMARY KEY(project,code))")
+ c.execute('DELETE FROM processing_jobs WHERE project=?',(pid,))
  c.execute('DELETE FROM original_files WHERE source IN (SELECT id FROM sources WHERE project=?)',(pid,))
  for t in ('evidence','sources','drafts','requests','clause_reviews','ai_suggestions'):c.execute(f'DELETE FROM {t} WHERE project=?',(pid,))
  r=c.execute('DELETE FROM projects WHERE id=?',(pid,));c.commit()

@@ -1,5 +1,5 @@
 """PostgreSQL adapter for existing SQLite-style app queries."""
-import os,re
+import os,re,threading
 import psycopg
 from psycopg.rows import dict_row
 
@@ -14,30 +14,35 @@ CREATE TABLE IF NOT EXISTS ai_suggestions(project BIGINT,code TEXT,assessment TE
 CREATE TABLE IF NOT EXISTS original_files(source BIGINT PRIMARY KEY,content BYTEA NOT NULL,content_type TEXT,uploaded TEXT);
 CREATE INDEX IF NOT EXISTS idx_sources_project ON sources(project);
 CREATE INDEX IF NOT EXISTS idx_evidence_project ON evidence(project);
+CREATE TABLE IF NOT EXISTS processing_jobs(id BIGSERIAL PRIMARY KEY,project BIGINT,source BIGINT,kind TEXT,status TEXT DEFAULT 'queued',progress INTEGER DEFAULT 0,message TEXT DEFAULT '',created TEXT,updated TEXT);
 '''
 class Row(dict):
  def __getitem__(self,k):
   if isinstance(k,int):return list(self.values())[k]
   return super().__getitem__(k)
 def row_factory(cursor):
-    description = cursor.description
-    cols = [x.name for x in description] if description is not None else []
-    def make(values):
-        return Row(zip(cols, values))
-    return make
+ cols=[x.name for x in cursor.description] if cursor.description is not None else []
+ def make(values):return Row(zip(cols,values))
+ return make
 class Result:
  def __init__(self,cur,lastrowid=None):self.cur=cur;self.lastrowid=lastrowid;self.rowcount=cur.rowcount
  def fetchone(self):return self.cur.fetchone()
  def fetchall(self):return self.cur.fetchall()
  def __iter__(self):return iter(self.cur)
+_init_lock=threading.Lock()
+_initialized=False
 class Connection:
  def __init__(self):
   url=os.environ['DATABASE_URL']
   self.c=psycopg.connect(url,autocommit=False,row_factory=row_factory,connect_timeout=15)
-  self.c.execute('SET statement_timeout = 60000')
-  for stmt in SCHEMA.split(';'):
-   if stmt.strip():self.c.execute(stmt)
-  self.c.commit()
+  global _initialized
+  if not _initialized:
+   with _init_lock:
+    if not _initialized:
+     for stmt in SCHEMA.split(';'):
+      if stmt.strip():self.c.execute(stmt)
+     self.c.commit()
+     _initialized=True
  def execute(self,sql,args=()):
   sql=sql.replace('?', '%s')
   returning=bool(re.match(r'\s*INSERT\s+INTO\s+(projects|sources)\s*\(',sql,re.I)) and 'RETURNING' not in sql.upper()
