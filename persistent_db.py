@@ -16,6 +16,9 @@ CREATE INDEX IF NOT EXISTS idx_sources_project ON sources(project);
 CREATE INDEX IF NOT EXISTS idx_evidence_project ON evidence(project);
 CREATE TABLE IF NOT EXISTS draft_audit(id BIGSERIAL PRIMARY KEY,project BIGINT,section TEXT,old_body TEXT,new_body TEXT,old_confirmed INTEGER,new_confirmed INTEGER,actor TEXT,changed TEXT);
 CREATE INDEX IF NOT EXISTS idx_draft_audit_project ON draft_audit(project,section);
+CREATE TABLE IF NOT EXISTS review_comments(id BIGSERIAL PRIMARY KEY,project BIGINT,section TEXT,reviewer TEXT,comment TEXT,status TEXT DEFAULT 'open',created TEXT,updated TEXT);
+CREATE TABLE IF NOT EXISTS entity_boundaries(id BIGSERIAL PRIMARY KEY,project BIGINT,name TEXT,scope TEXT,method TEXT,note TEXT,created TEXT);
+CREATE TABLE IF NOT EXISTS financial_links(id BIGSERIAL PRIMARY KEY,project BIGINT,section TEXT,item TEXT,account TEXT,amount DOUBLE PRECISION,currency TEXT DEFAULT 'TWD',source_id BIGINT,note TEXT,created TEXT);
 CREATE TABLE IF NOT EXISTS processing_jobs(id BIGSERIAL PRIMARY KEY,project BIGINT,source BIGINT,kind TEXT,status TEXT DEFAULT 'queued',progress INTEGER DEFAULT 0,message TEXT DEFAULT '',created TEXT,updated TEXT);
 '''
 class Row(dict):

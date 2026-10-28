@@ -425,4 +425,79 @@ def export(pid,fmt):
   doc.build(story);data=buf.getvalue();mime='application/pdf'
  else:return jsonify(error='不支援'),400
  return send_file(io.BytesIO(data),mimetype=mime,as_attachment=True,download_name=f'ESG_{pid}.{fmt}')
+
+# V7.1: reviewer comments, reporting boundaries, financial reconciliation and illustrative scenarios.
+@app.get('/api/projects/<int:pid>/professional')
+def professional(pid):
+ c=conn()
+ if not project(c,pid):return jsonify(error='找不到專案'),404
+ comments=[dict(x) for x in c.execute('SELECT * FROM review_comments WHERE project=? ORDER BY id DESC LIMIT 200',(pid,))]
+ entities=[dict(x) for x in c.execute('SELECT * FROM entity_boundaries WHERE project=? ORDER BY id DESC',(pid,))]
+ links=[dict(x) for x in c.execute('SELECT * FROM financial_links WHERE project=? ORDER BY id DESC',(pid,))]
+ return jsonify(comments=comments,entities=entities,links=links)
+
+@app.post('/api/projects/<int:pid>/professional/comments')
+def add_review_comment(pid):
+ j=request.get_json(silent=True) or {};c=conn()
+ if not project(c,pid):return jsonify(error='找不到專案'),404
+ section=str(j.get('section',''))
+ if section not in KEYS:return jsonify(error='請選擇有效章節'),400
+ comment=str(j.get('comment','')).strip()
+ if not comment or len(comment)>5000:return jsonify(error='評語必填且不可超過 5000 字'),400
+ reviewer=str(j.get('reviewer','')).strip()[:100] or '未具名審閱者'
+ now=datetime.datetime.now(datetime.timezone.utc).isoformat()
+ c.execute('INSERT INTO review_comments(project,section,reviewer,comment,status,created,updated) VALUES(?,?,?,?,?,?,?)',(pid,section,reviewer,comment,'open',now,now));c.commit();return jsonify(ok=True),201
+
+@app.put('/api/projects/<int:pid>/professional/comments/<int:cid>')
+def resolve_review_comment(pid,cid):
+ j=request.get_json(silent=True) or {};status=j.get('status')
+ if status not in ('open','resolved'):return jsonify(error='狀態不正確'),400
+ c=conn();r=c.execute('UPDATE review_comments SET status=?,updated=? WHERE project=? AND id=? RETURNING id',(status,datetime.datetime.now(datetime.timezone.utc).isoformat(),pid,cid)).fetchone()
+ if not r:return jsonify(error='找不到評語'),404
+ c.commit();return jsonify(ok=True)
+
+@app.post('/api/projects/<int:pid>/professional/entities')
+def add_boundary(pid):
+ j=request.get_json(silent=True) or {};c=conn()
+ if not project(c,pid):return jsonify(error='找不到專案'),404
+ name=str(j.get('name','')).strip()[:200];scope=str(j.get('scope','')).strip()[:100];method=str(j.get('method','')).strip()[:100];note=str(j.get('note','')).strip()[:2000]
+ if not name or not scope or not method:return jsonify(error='名稱、邊界類型及方法必填'),400
+ c.execute('INSERT INTO entity_boundaries(project,name,scope,method,note,created) VALUES(?,?,?,?,?,?)',(pid,name,scope,method,note,datetime.datetime.now(datetime.timezone.utc).isoformat()));c.commit();return jsonify(ok=True),201
+
+@app.post('/api/projects/<int:pid>/professional/links')
+def add_financial_link(pid):
+ j=request.get_json(silent=True) or {};c=conn()
+ if not project(c,pid):return jsonify(error='找不到專案'),404
+ section=str(j.get('section',''))
+ if section not in KEYS:return jsonify(error='章節不存在'),400
+ item=str(j.get('item','')).strip()[:200];account=str(j.get('account','')).strip()[:200]
+ if not item or not account:return jsonify(error='項目與財報科目必填'),400
+ try:amount=float(j.get('amount'))
+ except (ValueError,TypeError):return jsonify(error='金額必須為數字'),400
+ import math
+ if not math.isfinite(amount):return jsonify(error='金額必須為有限數字'),400
+ sid=j.get('source_id') or None
+ if sid is not None:
+  try:sid=int(sid)
+  except (ValueError,TypeError):return jsonify(error='來源 ID 不正確'),400
+  if not c.execute('SELECT 1 FROM sources WHERE id=? AND project=?',(sid,pid)).fetchone():return jsonify(error='來源不屬於本專案'),400
+ currency=str(j.get('currency','TWD')).upper()
+ if currency not in ('TWD','USD','EUR','JPY','CNY'):return jsonify(error='不支援的幣別'),400
+ c.execute('INSERT INTO financial_links(project,section,item,account,amount,currency,source_id,note,created) VALUES(?,?,?,?,?,?,?,?,?)',(pid,section,item,account,amount,currency,sid,str(j.get('note',''))[:2000],datetime.datetime.now(datetime.timezone.utc).isoformat()));c.commit();return jsonify(ok=True),201
+
+@app.get('/api/projects/<int:pid>/professional/consistency')
+def consistency(pid):
+ c=conn()
+ if not project(c,pid):return jsonify(error='找不到專案'),404
+ drafts={x['section']:(x['body'] or '') for x in c.execute('SELECT section,body FROM drafts WHERE project=?',(pid,))}
+ text_strategy='\n'.join(v for k,v in drafts.items() if k.startswith('3.'))
+ text_targets='\n'.join(v for k,v in drafts.items() if k.startswith('5.'))
+ text_fin='\n'.join(v for k,v in drafts.items() if k.startswith('3.') or k.startswith('5.'))
+ rules=[('再生能源/太陽能','太陽能|再生能源|光電','發電量|裝置容量|再生能源占比','策略提及再生能源，請檢查指標與目標是否有相應數據'),('減碳承諾','淨零|減碳目標|碳中和','基準年|目標年|減量百分比','策略提及減碳承諾，請核對基準年、目標年及衡量方式'),('資本支出','資本支出|CapEx|設備投資','資本支出|CapEx','請核對相關投資是否已與財報科目連結')]
+ import re
+ warnings=[]
+ for title,trigger,expected,message in rules:
+  if re.search(trigger,text_strategy,re.I) and not re.search(expected,text_targets if title!='資本支出' else text_fin,re.I):warnings.append({'title':title,'message':message})
+ return jsonify(warnings=warnings,note='僅為關鍵字提醒，不代表已完成會計調節或 IFRS 合規檢核。')
+
 if __name__=='__main__':app.run(host='127.0.0.1',port=5050,debug=False)

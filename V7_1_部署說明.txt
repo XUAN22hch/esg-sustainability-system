@@ -1,0 +1,4 @@
+V7.1 專業顧問功能增量版。從 V7.0 升級：上傳 app.py、persistent_db.py、index.html 覆蓋同名檔案。其他 V7.0 檔案保留，不要刪除資料庫。首次部署會自動建立 review_comments、entity_boundaries、financial_links 三張資料表。
+新增：審閱評語與處理狀態、集團邊界登錄、財報科目對應、碳費假設試算、關鍵字一致性提醒。
+未完成：個人身分驗證與唯讀審計角色、多租戶隔離、報表自動合併調節、真正背景佇列、自動儲存與版本比較、完整 IFRS 準則核驗。
+安全：使用共用 Basic Auth 帳號，不能將審閱者文字視為已驗證身分；切勿把機密內容存入 localStorage。
