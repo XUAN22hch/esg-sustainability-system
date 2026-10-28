@@ -297,8 +297,8 @@ def _process_report(job_id,pid):
  """
  c=None
  try:
-  from openai import OpenAI
-  if not os.getenv('OPENAI_API_KEY'):raise ValueError('尚未設定 OPENAI_API_KEY')
+  from gemini_client import generate_json
+  if not os.getenv('GEMINI_API_KEY'):raise ValueError('尚未設定 GEMINI_API_KEY')
   c=db(DB);p=project(c,pid)
   if not p:raise ValueError('公司專案不存在')
   _report_progress(c,job_id,3,'正在整理企業資料與來源索引')
@@ -310,8 +310,7 @@ def _process_report(job_id,pid):
    try:keys=json.loads(e['sections'])
    except (TypeError,ValueError):keys=[]
    for key in keys:mapping.setdefault(key,[]).append(e)
-  client=OpenAI(timeout=150,max_retries=2)
-  model=os.getenv('OPENAI_REPORT_MODEL',os.getenv('OPENAI_MODEL','gpt-4o-mini'))
+  model=os.getenv('GEMINI_MODEL','gemini-2.5-flash')
   chapter_summaries=[]
   total=len(SECTIONS)
   for idx,(chapter,(heading,subs)) in enumerate(SECTIONS.items()):
@@ -330,6 +329,10 @@ def _process_report(job_id,pid):
     for e in evs:
      chosen[key].append({'id':e['id'],'source':e['filename'],'location':e['location'],'text':e['body'][:1250]})
      covered.add(e['id'])
+   existing={r['section']:r for r in c.execute('SELECT section,body,confirmed FROM drafts WHERE project=?',(pid,))}
+   if all(k in existing and existing[k]['body'].strip() and not existing[k]['body'].startswith(('【待補充','[待補充')) for k in keys):
+    chapter_summaries.append(heading+'：已有草稿，略過重新生成')
+    continue
    if not covered:
     output={key:'【待補充：'+title+'，目前未找到可核實的企業證據】' for key,title in zip(keys,subs)}
    else:
@@ -348,14 +351,16 @@ def _process_report(job_id,pid):
        'previous_chapter_summaries_for_consistency':chapter_summaries[-3:],
        'evidence_by_section':chosen,
        'evidence_total_in_project':len(rows),'evidence_in_this_chapter':len(covered)},ensure_ascii=False))
-    res=client.responses.create(model=model,store=False,input=[{'role':'user','content':prompt}],text={'format':{'type':'json_object'}})
-    output=json.loads(res.output_text)
+    output=generate_json(prompt,timeout=120)
     if not isinstance(output,dict):raise ValueError(f'第 {chapter} 章 AI 回傳格式不正確')
    chapter_preview=[]
    for key,title in zip(keys,subs):
     body=str(output.get(key,'')).strip()
     if not body:body=f'【待補充：{title}，目前缺乏足夠的企業佐證資料】'
-    c.execute('INSERT INTO drafts(project,section,body,confirmed,updated) VALUES(?,?,?,0,?) ON CONFLICT(project,section) DO UPDATE SET body=excluded.body,confirmed=0,updated=excluded.updated WHERE drafts.confirmed=0',(pid,key,body,datetime.datetime.now().isoformat()))
+    if key in existing and existing[key]['body'].strip() and not existing[key]['body'].startswith(('【待補充','[待補充')):
+     body=existing[key]['body']
+    else:
+     c.execute('INSERT INTO drafts(project,section,body,confirmed,updated) VALUES(?,?,?,0,?) ON CONFLICT(project,section) DO UPDATE SET body=excluded.body,confirmed=0,updated=excluded.updated WHERE drafts.confirmed=0',(pid,key,body,datetime.datetime.now().isoformat()))
     chapter_preview.append(f'{key} {title}: {body[:160]}')
    c.commit()
    chapter_summaries.append(f'{heading}：'+'；'.join(chapter_preview)[:900])
