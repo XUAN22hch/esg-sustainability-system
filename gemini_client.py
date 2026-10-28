@@ -6,6 +6,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import threading
+import random
 
 class GeminiError(RuntimeError):
     pass
@@ -92,7 +93,10 @@ def generate_json(prompt, *, timeout=120):
     url = BASE + 'models/' + urllib.parse.quote(model, safe='') + ':generateContent'
     payload = {'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
                'generationConfig': {'responseMimeType': 'application/json', 'temperature': 0.2}}
-    for attempt in range(3):
+    # Transient server overload: exponential backoff with jitter.
+    # Never retry authentication, model, or quota errors automatically.
+    max_retries = 4
+    for attempt in range(max_retries + 1):
         try:
             obj = _call(url, key, payload, timeout=timeout)
             candidates = obj.get('candidates') or []
@@ -106,12 +110,20 @@ def generate_json(prompt, *, timeout=120):
             except json.JSONDecodeError as e:
                 raise GeminiError('Gemini 回傳內容不是完整 JSON，可能輸出長度不足。請減少單章資料量後重試。') from e
         except urllib.error.HTTPError as e:
-            if e.code in (500, 502, 503, 504) and attempt < 2:
-                time.sleep(3)
-                continue
+            if e.code in (500, 502, 503, 504):
+                if attempt < max_retries:
+                    # 10, 20, 40, 80 sec, plus a small jitter; honor Retry-After when provided.
+                    delay = min(80, 10 * (2 ** attempt)) + random.uniform(0, 2)
+                    retry_after = e.headers.get('Retry-After') if e.headers else None
+                    if retry_after:
+                        try: delay = min(120, max(delay, float(retry_after)))
+                        except ValueError: pass
+                    time.sleep(delay)
+                    continue
+                raise GeminiError('Gemini 伺服器持續忙碌（HTTP %s），已自動重試 %s 次。已儲存的小節不會刪除，請稍後按整本生成以接續未完成部分。' % (e.code, max_retries)) from e
             raise _error(e, model) from e
         except (TimeoutError, urllib.error.URLError) as e:
             if attempt < 2:
-                time.sleep(2)
+                time.sleep(5 * (attempt + 1))
                 continue
             raise GeminiError('Gemini 連線逾時。已儲存的草稿仍會保留，請稍後接續生成。') from e

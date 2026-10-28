@@ -1,4 +1,4 @@
-import os,json,io,datetime,hashlib,threading,time,logging
+import os,json,io,datetime,hashlib,threading,time,logging,zipfile
 from concurrent.futures import ThreadPoolExecutor
 from flask import g
 from flask import Flask,request,jsonify,send_file,render_template_string
@@ -11,9 +11,11 @@ def access_control():
  from flask import Response
  import secrets
  password=os.environ.get('APP_PASSWORD','')
+ if not password and os.environ.get('ALLOW_UNAUTHENTICATED_LOCAL')!='1':
+  return Response('安全設定尚未完成：請在 Render Environment 設定 APP_PASSWORD，避免企業資料公開。',503)
  if password:
   auth=request.authorization
-  if not auth or not secrets.compare_digest(auth.password or '',password):
+  if not auth or not secrets.compare_digest(auth.username or '','esg') or not secrets.compare_digest(auth.password or '',password):
    return Response('請輸入系統帳號密碼',401,{'WWW-Authenticate':'Basic realm="ESG Workspace"'})
 def conn():
  if not hasattr(g,'esg_conn'):
@@ -281,7 +283,7 @@ def delete_project(pid):
  c.execute("CREATE TABLE IF NOT EXISTS ai_suggestions(project INTEGER,code TEXT,assessment TEXT,support TEXT,gap TEXT,request_text TEXT,evidence_ids TEXT,model TEXT,updated TEXT,PRIMARY KEY(project,code))")
  c.execute('DELETE FROM processing_jobs WHERE project=?',(pid,))
  c.execute('DELETE FROM original_files WHERE source IN (SELECT id FROM sources WHERE project=?)',(pid,))
- for t in ('evidence','sources','drafts','requests','clause_reviews','ai_suggestions'):c.execute(f'DELETE FROM {t} WHERE project=?',(pid,))
+ for t in ('evidence','sources','drafts','requests','clause_reviews','ai_suggestions','draft_audit'):c.execute(f'DELETE FROM {t} WHERE project=?',(pid,))
  r=c.execute('DELETE FROM projects WHERE id=?',(pid,));c.commit()
  if not r.rowcount:return jsonify(error='找不到專案'),404
  return jsonify(ok=True)
@@ -333,7 +335,66 @@ def gen(pid):
 @app.put('/api/projects/<int:pid>/sections/<key>')
 def edit(pid,key):
  if key not in KEYS:return jsonify(error='章節不存在'),404
- j=request.get_json();c=conn();c.execute('INSERT INTO drafts(project,section,body,confirmed,updated) VALUES(?,?,?,?,?) ON CONFLICT(project,section) DO UPDATE SET body=excluded.body,confirmed=excluded.confirmed,updated=excluded.updated',(pid,key,j.get('body',''),int(bool(j.get('confirmed'))),datetime.datetime.now().isoformat()));c.commit();return jsonify(ok=True)
+ j=request.get_json(silent=True) or {};c=conn()
+ if not project(c,pid):return jsonify(error='找不到專案'),404
+ old=c.execute('SELECT body,confirmed FROM drafts WHERE project=? AND section=?',(pid,key)).fetchone()
+ body=str(j.get('body',''))[:100000];confirmed=int(bool(j.get('confirmed')));now=datetime.datetime.now().isoformat()
+ c.execute('INSERT INTO drafts(project,section,body,confirmed,updated) VALUES(?,?,?,?,?) ON CONFLICT(project,section) DO UPDATE SET body=excluded.body,confirmed=excluded.confirmed,updated=excluded.updated',(pid,key,body,confirmed,now))
+ c.execute('INSERT INTO draft_audit(project,section,old_body,new_body,old_confirmed,new_confirmed,actor,changed) VALUES(?,?,?,?,?,?,?,?)',(pid,key,old['body'] if old else '',body,int(old['confirmed']) if old else 0,confirmed,'esg (共用帳號)',now))
+ c.commit();return jsonify(ok=True)
+
+@app.get('/api/projects/<int:pid>/audit')
+def audit(pid):
+ c=conn()
+ if not project(c,pid):return jsonify(error='找不到專案'),404
+ key=request.args.get('section','')
+ if key and key not in KEYS:return jsonify(error='章節不存在'),400
+ if key:rows=c.execute('SELECT id,section,old_body,new_body,old_confirmed,new_confirmed,actor,changed FROM draft_audit WHERE project=? AND section=? ORDER BY id DESC LIMIT 100',(pid,key))
+ else:rows=c.execute('SELECT id,section,old_body,new_body,old_confirmed,new_confirmed,actor,changed FROM draft_audit WHERE project=? ORDER BY id DESC LIMIT 100',(pid,))
+ return jsonify([dict(x) for x in rows])
+
+@app.get('/api/projects/<int:pid>/backup')
+def backup(pid):
+ c=conn();p=project(c,pid)
+ if not p:return jsonify(error='找不到專案'),404
+ tables={'sources':'SELECT * FROM sources WHERE project=?','evidence':'SELECT * FROM evidence WHERE project=?','drafts':'SELECT * FROM drafts WHERE project=?','requests':'SELECT * FROM requests WHERE project=?','clause_reviews':'SELECT * FROM clause_reviews WHERE project=?','ai_suggestions':'SELECT * FROM ai_suggestions WHERE project=?','processing_jobs':'SELECT * FROM processing_jobs WHERE project=?','draft_audit':'SELECT * FROM draft_audit WHERE project=?'}
+ payload={'format':'esg-v7-project-backup','created':datetime.datetime.now(datetime.timezone.utc).isoformat(),'project':dict(p),'tables':{}}
+ for name,sql in tables.items():payload['tables'][name]=[dict(x) for x in c.execute(sql,(pid,))]
+ stream=io.BytesIO()
+ with zipfile.ZipFile(stream,'w',zipfile.ZIP_DEFLATED) as z:
+  z.writestr('project.json',json.dumps(payload,ensure_ascii=False,indent=2,default=str))
+  sources=payload['tables']['sources']
+  for item in sources:
+   record=c.execute('SELECT content,content_type FROM original_files WHERE source=?',(item['id'],)).fetchone()
+   if record and record['content'] is not None:
+    name=secure_filename(item.get('name') or 'document') or 'document'
+    z.writestr(f"original_files/{item['id']}_{name}",bytes(record['content']))
+  z.writestr('README.txt','ESG 專案完整備份（JSON + 原始檔案），包含敏感資料。請妥善保管。此檔供備份與人工復原，非一鍵還原程式。')
+ stream.seek(0)
+ return send_file(stream,mimetype='application/zip',as_attachment=True,download_name=f'esg_project_{pid}_backup.zip')
+
+@app.get('/api/projects/<int:pid>/dashboard')
+def dashboard(pid):
+ c=conn()
+ if not project(c,pid):return jsonify(error='找不到專案'),404
+ rows=[dict(x) for x in c.execute('SELECT section,body,confirmed FROM drafts WHERE project=?',(pid,))]
+ drafts={x['section']:x for x in rows};evidence=[dict(x) for x in c.execute('SELECT sections FROM evidence WHERE project=?',(pid,))]
+ support={k:0 for k in KEYS}
+ for e in evidence:
+  try:keys=json.loads(e['sections'] or '[]')
+  except (ValueError,TypeError):keys=[]
+  for k in keys:
+   if k in support:support[k]+=1
+ result=[]
+ for chapter,(heading,subs) in SECTIONS.items():
+  items=[]
+  for i,title in enumerate(subs,1):
+   key=f'{chapter}.{i}';d=drafts.get(key,{});body=(d.get('body') or '').strip();generated=bool(body and not body.startswith(('【待補充','[待補充')));confirmed=bool(d.get('confirmed'));has_evidence=support[key]>0
+   status='已確認' if confirmed else '待補證據' if not has_evidence else '待人工審閱' if generated else '待撰寫'
+   items.append({'key':key,'title':title,'generated':generated,'confirmed':confirmed,'evidence':support[key],'status':status})
+  result.append({'chapter':chapter,'title':heading,'items':items,'total':len(items),'generated':sum(x['generated'] for x in items),'confirmed':sum(x['confirmed'] for x in items),'supported':sum(x['evidence']>0 for x in items)})
+ return jsonify(chapters=result,summary={'total':len(KEYS),'generated':sum(ch['generated'] for ch in result),'confirmed':sum(ch['confirmed'] for ch in result),'supported':sum(ch['supported'] for ch in result)},note='證據對應為初步分類；完成率不代表 IFRS 合規或外部確信。')
+
 @app.put('/api/projects/<int:pid>/evidence/<int:eid>')
 def map_evidence(pid,eid):
  j=request.get_json();keys=[k for k in j.get('sections',[]) if k in KEYS];c=conn();c.execute('UPDATE evidence SET sections=? WHERE id=? AND project=?',(json.dumps(keys),eid,pid));c.commit();return jsonify(ok=True)

@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS ai_suggestions(project BIGINT,code TEXT,assessment TE
 CREATE TABLE IF NOT EXISTS original_files(source BIGINT PRIMARY KEY,content BYTEA NOT NULL,content_type TEXT,uploaded TEXT);
 CREATE INDEX IF NOT EXISTS idx_sources_project ON sources(project);
 CREATE INDEX IF NOT EXISTS idx_evidence_project ON evidence(project);
+CREATE TABLE IF NOT EXISTS draft_audit(id BIGSERIAL PRIMARY KEY,project BIGINT,section TEXT,old_body TEXT,new_body TEXT,old_confirmed INTEGER,new_confirmed INTEGER,actor TEXT,changed TEXT);
+CREATE INDEX IF NOT EXISTS idx_draft_audit_project ON draft_audit(project,section);
 CREATE TABLE IF NOT EXISTS processing_jobs(id BIGSERIAL PRIMARY KEY,project BIGINT,source BIGINT,kind TEXT,status TEXT DEFAULT 'queued',progress INTEGER DEFAULT 0,message TEXT DEFAULT '',created TEXT,updated TEXT);
 '''
 class Row(dict):

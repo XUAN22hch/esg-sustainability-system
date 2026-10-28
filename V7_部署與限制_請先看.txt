@@ -1,0 +1,16 @@
+ESG V7.0：以 V6.5 為基礎的可部署增量版。
+
+重要！部署前請先到 Render > Environment 新增 APP_PASSWORD，設定一組足夠強的專用密碼（不要分享給任何人）。
+登入帳號固定 esg，密碼是 APP_PASSWORD。未設定時，網站會回傳 503 而不公開企業資料。
+
+步驟：1. 先備份現有資料庫。2. 在 Render 設 APP_PASSWORD。3. GitHub 專案根目錄上傳 ZIP 內所有 .py/.html/.yaml/.txt，覆蓋同名檔案。4. Commit，等 Render Live。5. 開網站登入帳號 esg + 設定的密碼。
+
+新功能：進度儀表板、各章節全文預覽、人工修改歷程（僅從 V7 起）、含原始文件的專案 ZIP 備份。
+
+限制：
+- 尚未建立多使用者 RBAC / 多租戶隔離；共用帳號不適合多客戶對外開放。
+- 專案備份是可保存的 JSON + 原始檔案，不提供自動一鍵還原。
+- Gemini 生成仍使用 V6.5，可能受免費 API 503/429 及 Render 重啟影響。
+- IFRS 完成度不等於合規；玉山／中華電信僅參考報告形式，不採用其公司資料。
+- 請勿在未經客戶授權下將機密資料傳給第三方 AI。
+- 請保留 DATABASE_URL 與 GEMINI_API_KEY，無需重建 Supabase。
