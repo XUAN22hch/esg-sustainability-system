@@ -5,11 +5,14 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import threading
 
 class GeminiError(RuntimeError):
     pass
 
 BASE = 'https://generativelanguage.googleapis.com/v1beta/'
+_model_cache = {}
+_cache_lock = threading.Lock()
 
 
 def _call(url, key, payload=None, timeout=30):
@@ -73,8 +76,14 @@ def generate_json(prompt, *, timeout=120):
     if not key:
         raise GeminiError('尚未設定 GEMINI_API_KEY，請到 Render Environment 新增。')
     configured = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash').strip()
+    cache_key = key[-12:]
+    with _cache_lock:
+        cached = _model_cache.get(cache_key)
     try:
-        models = _available_models(key)
+        models = cached if cached is not None else _available_models(key)
+        if cached is None:
+            with _cache_lock:
+                _model_cache[cache_key] = models
     except urllib.error.HTTPError as e:
         raise _error(e, '模型清單') from e
     except (TimeoutError, urllib.error.URLError) as e:
@@ -83,7 +92,7 @@ def generate_json(prompt, *, timeout=120):
     url = BASE + 'models/' + urllib.parse.quote(model, safe='') + ':generateContent'
     payload = {'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
                'generationConfig': {'responseMimeType': 'application/json', 'temperature': 0.2}}
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             obj = _call(url, key, payload, timeout=timeout)
             candidates = obj.get('candidates') or []
@@ -97,12 +106,12 @@ def generate_json(prompt, *, timeout=120):
             except json.JSONDecodeError as e:
                 raise GeminiError('Gemini 回傳內容不是完整 JSON，可能輸出長度不足。請減少單章資料量後重試。') from e
         except urllib.error.HTTPError as e:
-            if e.code in (500, 502, 503, 504) and attempt == 0:
+            if e.code in (500, 502, 503, 504) and attempt < 2:
                 time.sleep(3)
                 continue
             raise _error(e, model) from e
         except (TimeoutError, urllib.error.URLError) as e:
-            if attempt == 0:
+            if attempt < 2:
                 time.sleep(2)
                 continue
             raise GeminiError('Gemini 連線逾時。已儲存的草稿仍會保留，請稍後接續生成。') from e

@@ -1,9 +1,13 @@
-# V6.2 Gemini 免費版部署說明
+# ESG V6.3 斷點續寫與逾時修正版
 
-1. 先備份 Supabase。此版不刪除或清空既有資料。
-2. 將 ZIP 解壓縮後的 `app.py`、`ai_review.py`、`gemini_client.py`、`requirements.txt` 上傳到 GitHub 專案根目錄（覆蓋同名檔案）。其餘檔案沿用 V6，不需更動。
-3. Render → Environment 確認 `GEMINI_API_KEY` 已設定；不要分享金鑰。
-4. 等 Render 顯示 Live，重新整理網站。使用非機密測試資料先測試。
-5. 按一次「一鍵 AI 生成整本永續專章」。已完成的非待補充小節不會被重寫；已確認的草稿仍受保護。
+1. 先備份 Supabase；此版不清空、不遷移資料庫。
+2. 把 app.py、gemini_client.py、index.html 上傳 GitHub 專案根目錄覆蓋同名檔案。
+3. Render 部署 Live 後 Ctrl+Shift+R 重新整理。
+4. 等先前 report 工作確定為 error/done 後，按一次「一鍵 AI 生成整本永續專章」。
+5. 每次只生成一小節，完成後立即寫入 Supabase；已有非待補正文或人工確認內容會跳過。
+6. Gemini 模型清單在每個 Render 程序中快取，避免每小節重查；連線逾時最多重試 2 次。
+7. 進度以每小節更新，前端最多等待 15 分鐘。免費 Render 重啟仍可能中斷背景執行緒；7 分鐘未更新的舊工作可在下次啟動時標為失敗。
+8. 無法保證免費 API 不會限流或逾時。未完成的小節可以下次接續。資料不足標示待補，不保證整本報告頁數。
+9. 免費 Gemini API 不宜直接處理未獲授權的客戶機密資料。
 
-注意：Gemini 免費額度有速率與每日限制，並非無限量。若 429，保留已生成內容，稍後重試。免費服務的資料處理條款不適合未經授權的機密客戶資料。背景執行緒在 Render Free 重新部署時仍可能中斷，須待舊工作失效後再啟動。此版為程式修補，已做靜態語法檢查，未在真實 Render/Gemini 環境端對端測試。預設模型 `gemini-2.5-flash`，若帳戶不支援，須依 AI Studio 可用模型調整 `GEMINI_MODEL`。
+僅做語法與 ZIP 完整性檢查，尚未在實際 Render/Supabase/Gemini 端到端測試。

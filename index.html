@@ -63,7 +63,7 @@ async function generate(){
  try{
   const pid=current;
   const r=await api('/projects/'+pid+'/report/start',{method:'POST'});
-  for(let i=0;i<180;i++){
+  for(let i=0;i<450;i++){
    await new Promise(resolve=>setTimeout(resolve,2000));
    const job=await api('/projects/'+pid+'/jobs/'+r.job_id);
    if(progress)progress.textContent=`${job.message}（${job.progress}%）`;
@@ -72,7 +72,7 @@ async function generate(){
    }
    if(job.status==='error')throw Error(job.message||'AI 撰寫失敗');
   }
-  throw Error('等待超過 6 分鐘，請查看 Render Logs；已生成的章節不會自動刪除。');
+  throw Error('等待超過 15 分鐘，請查看 Render Logs；已生成的章節不會自動刪除。');
  }catch(e){msg('AI 生成失敗：'+e.message);if(progress)progress.textContent='失敗：'+e.message;}
  finally{reportBusy=false;if(btn){btn.disabled=false;btn.textContent='一鍵 AI 生成整本永續專章';}}
 }function exportFile(fmt){window.location.href='/api/projects/'+current+'/export/'+fmt}async function editSection(k){let r=data.drafts[k]||{};let body=prompt('修改本節文字（按確定後儲存；請自行核對來源）',r.body||'');if(body===null)return;let confirmed=confirm('是否標示為「已人工確認」？\n請先確認內容與來源、適用性、期間與數值一致。');await api('/projects/'+current+'/sections/'+k,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({body,confirmed})});await refresh();tab('chapters')}async function remap(id){let e=data.evidence.find(x=>x.id===id);let s=prompt('以逗號分隔章節編號，例如 3.1,4.3',e.sections.join(','));if(s===null)return;await api('/projects/'+current+'/evidence/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({sections:s.split(',').map(x=>x.trim())})});await refresh();tab('sources')}
