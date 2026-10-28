@@ -20,9 +20,11 @@ class Row(dict):
   if isinstance(k,int):return list(self.values())[k]
   return super().__getitem__(k)
 def row_factory(cursor):
- cols=[x.name for x in cursor.description]
- def make(values):return Row(zip(cols,values))
- return make
+    description = cursor.description
+    cols = [x.name for x in description] if description is not None else []
+    def make(values):
+        return Row(zip(cols, values))
+    return make
 class Result:
  def __init__(self,cur,lastrowid=None):self.cur=cur;self.lastrowid=lastrowid;self.rowcount=cur.rowcount
  def fetchone(self):return self.cur.fetchone()
