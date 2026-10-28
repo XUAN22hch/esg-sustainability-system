@@ -133,8 +133,28 @@ def docx_bytes(c,pid):
    k=f'{ch}.{i}';d.add_heading(f'{k} {sub}',2)
    body=r.get(k,{}).get('body','【待補充：尚未生成本節】')
    if '【待補充' in body or '[待補充' in body:missing.append((k,sub))
-   for para in body.split('\n'):
-    if para.strip():d.add_paragraph(para.strip())
+   lines=body.split('\n');idx=0
+   while idx<len(lines):
+    line=lines[idx].strip()
+    if not line:idx+=1;continue
+    if line.startswith('|') and line.endswith('|'):
+     group=[]
+     while idx<len(lines) and lines[idx].strip().startswith('|') and lines[idx].strip().endswith('|'):
+      cells=[x.strip() for x in lines[idx].strip().strip('|').split('|')]
+      if not all(x and set(x)<=set(':- ') for x in cells):group.append(cells)
+      idx+=1
+     if group:
+      width=max(len(x) for x in group);table=d.add_table(rows=1,cols=width);table.style='Light Shading Accent 1'
+      for j,v in enumerate(group[0]):table.rows[0].cells[j].text=v
+      for vals in group[1:]:
+       cells=table.add_row().cells
+       for j,v in enumerate(vals):cells[j].text=v
+     continue
+    if line.startswith('### '):d.add_heading(line[4:],3)
+    elif line.startswith('## '):d.add_heading(line[3:],3)
+    elif line.startswith('**') and line.endswith('**'):d.add_heading(line.strip('* '),3)
+    else:d.add_paragraph(line)
+    idx+=1
  d.add_page_break();d.add_heading('附錄一｜待補資料與人工審核清單',1)
  d.add_paragraph('下表僅依草稿中的待補標示整理；未列入不代表已符合 IFRS S1／S2。')
  t=d.add_table(rows=1,cols=3);t.style='Light Shading Accent 1'
