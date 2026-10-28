@@ -107,16 +107,58 @@ def generate(c,pid):
 def report_rows(c,pid):
  rows=c.execute('SELECT * FROM drafts WHERE project=?',(pid,)).fetchall();return {r['section']:dict(r) for r in rows}
 def docx_bytes(c,pid):
- p=c.execute('SELECT * FROM projects WHERE id=?',(pid,)).fetchone();r=report_rows(c,pid);d=Document();d.add_heading(f'{p["name"]} 永續相關財務資訊專章',0);d.add_paragraph(f'報導年度：{p["year"]}｜草稿，未經準則符合性確信')
+ from docx.shared import Pt, Inches
+ from docx.enum.text import WD_ALIGN_PARAGRAPH
+ from docx.oxml import OxmlElement
+ from docx.oxml.ns import qn
+ p=c.execute('SELECT * FROM projects WHERE id=?',(pid,)).fetchone()
+ if not p:raise ValueError('找不到公司專案')
+ r=report_rows(c,pid)
+ d=Document();sec=d.sections[0];sec.top_margin=Inches(.85);sec.bottom_margin=Inches(.8)
+ normal=d.styles['Normal'];normal.font.name='Microsoft JhengHei';normal.font.size=Pt(10.5)
+ normal.paragraph_format.space_after=Pt(7)
+ for style in ['Title','Heading 1','Heading 2']:
+  d.styles[style].font.name='Microsoft JhengHei'
+ title=d.add_heading(f'{p["name"]}\n永續相關財務資訊專章',0);title.alignment=WD_ALIGN_PARAGRAPH.CENTER
+ d.add_paragraph(f'報導年度：{p["year"]}').alignment=WD_ALIGN_PARAGRAPH.CENTER
+ d.add_paragraph('AI 生成之待審閱草稿｜尚未完成準則符合性確認與確信').alignment=WD_ALIGN_PARAGRAPH.CENTER
+ d.add_page_break();d.add_heading('目錄',1)
+ toc=d.add_paragraph();fld=OxmlElement('w:fldSimple');fld.set(qn('w:instr'),r'TOC \o "1-2" \h \z \u');toc._p.append(fld)
+ d.add_paragraph('在 Microsoft Word 中按 Ctrl+A，再按 F9 更新目錄與頁碼。')
+ d.add_page_break()
+ missing=[]
  for ch,(title,subs) in SECTIONS.items():
   d.add_heading(f'{ch} {title}',1)
   for i,sub in enumerate(subs,1):
    k=f'{ch}.{i}';d.add_heading(f'{k} {sub}',2)
-   for para in r.get(k,{}).get('body','[待補充]').split('\n'):d.add_paragraph(para)
- d.add_heading('附錄｜資料來源與分類紀錄',1)
- for e in c.execute('SELECT e.*,s.name filename FROM evidence e JOIN sources s ON e.source=s.id WHERE e.project=?',(pid,)):
-  d.add_paragraph(f'#{e["id"]} {e["filename"]} / {e["location"]} → {e["sections"]}')
+   body=r.get(k,{}).get('body','【待補充：尚未生成本節】')
+   if '【待補充' in body or '[待補充' in body:missing.append((k,sub))
+   for para in body.split('\n'):
+    if para.strip():d.add_paragraph(para.strip())
+ d.add_page_break();d.add_heading('附錄一｜待補資料與人工審核清單',1)
+ d.add_paragraph('下表僅依草稿中的待補標示整理；未列入不代表已符合 IFRS S1／S2。')
+ t=d.add_table(rows=1,cols=3);t.style='Light Shading Accent 1'
+ for cell,value in zip(t.rows[0].cells,['節次','揭露主題','處理建議']):cell.text=value
+ for k,sub in missing:
+  for cell,value in zip(t.add_row().cells,[k,sub,'補充企業證據後重新生成或人工修訂']):cell.text=value
+ if not missing:d.add_paragraph('未偵測到明確待補標記；仍需人工檢查全部節次及來源。')
+ d.add_heading('附錄二｜企業資料來源索引',1)
+ t=d.add_table(rows=1,cols=3);t.style='Light Shading Accent 1'
+ for cell,value in zip(t.rows[0].cells,['證據 ID','原始文件與位置','初步對應章節']):cell.text=value
+ for e in c.execute('SELECT e.id,e.location,e.sections,s.name filename FROM evidence e JOIN sources s ON e.source=s.id WHERE e.project=? ORDER BY e.id',(pid,)):
+  for cell,value in zip(t.add_row().cells,[str(e['id']),f'{e["filename"]}／{e["location"]}',str(e['sections'])]):cell.text=value
+ d.add_heading('附錄三｜IFRS S1／S2 揭露檢核索引',1)
+ d.add_paragraph('以下僅為顧問用重點檢核摘要，不是完整正式 IFRS 準則或符合性聲明。')
+ from compliance import CHECKS
+ reviews={x['code']:x for x in c.execute('SELECT * FROM clause_reviews WHERE project=?',(pid,))}
+ t=d.add_table(rows=1,cols=4);t.style='Light Shading Accent 1'
+ for cell,value in zip(t.rows[0].cells,['檢核點','主題','章節','人工狀態']):cell.text=value
+ for code,title,section,need in CHECKS:
+  for cell,value in zip(t.add_row().cells,[code,title,section,reviews.get(code,{}).get('status','unreviewed')]):cell.text=value
+ footer=sec.footer.paragraphs[0];footer.alignment=WD_ALIGN_PARAGRAPH.CENTER
+ footer.text='AI 草稿｜請核對企業證據、適用準則與揭露完整性'
  out=io.BytesIO();d.save(out);return out.getvalue()
+
 def excel_bytes(c,pid):
  w=Workbook();s=w.active;s.title='待補件與檢核';s.append(['章節','項目','企業資料支持','已生成文字','人工確認','待補充類型','IFRS準則符合性'])
  drafts=report_rows(c,pid)
