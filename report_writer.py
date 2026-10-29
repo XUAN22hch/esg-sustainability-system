@@ -37,8 +37,9 @@ def needs_work(body):
  return not s or s.startswith(('【待補充','[待補充'))
 
 
-def write_full_report(c,p,rows,job_id,progress,generate_json):
+def write_full_report(c,p,rows,job_id,progress,generate_json,chapter=None):
  sections=[(f'{ch}.{i}',ch,heading,title) for ch,(heading,subs) in SECTIONS.items() for i,title in enumerate(subs,1)]
+ if chapter is not None:sections=[x for x in sections if x[1]==str(chapter)]
  total=len(sections)
  # Context for narrative continuity is grounded in saved drafts, not invented.
  for pos,(key,ch,heading,title) in enumerate(sections,1):
@@ -55,7 +56,7 @@ def write_full_report(c,p,rows,job_id,progress,generate_json):
    context=[{'section':r['section'],'excerpt':(r['body'] or '')[:350]} for r in prev]
    snippets=[{'id':e['id'],'filename':e['filename'],'location':e['location'],'content':(e['body'] or '')[:1200]} for e in selected]
    prompt="""你是台灣上市櫃企業永續資訊專章主編。正在編寫一整本連貫的 IFRS S1／S2 永續相關財務資訊專章，而不是填寫問卷或揭露檢核清單。
-請參考玉山金控與中華電信永續專章的「報告型」編輯手法：正式敘述、管理方針、實際措施、目標與成果表格、未來規劃；只借鑑呈現手法，不得移植其公司事實。以下資料只有本企業的證據。
+請參考玉山金控、中華電信與東和鋼鐵 2025 永續相關財務資訊專章的「報告型」編輯手法：正式敘述、治理責任與流程、風險機會及財務影響、管理方針、實際措施、具基準年與目標年的目標及成果表格、減排行動與未來規劃（僅於該節主題相關且有企業證據時納入）；只借鑑呈現手法，不得移植其公司事實。以下資料只有本企業的證據。
 針對指定小節撰寫可直接放入 Word 報告的繁體中文正文；資料充分時 450–900 字，資料不足時寧可較短，不得用套話湊字數。
 請用以下固定內容順序，若該類資料完全不足則保留「【待補充：具體項目】」：
 「管理方針與現況」：2–4 個自然段落，說明企業目前的實際做法及背景。

@@ -17,8 +17,8 @@ const views=[['overview','專案總覽'],['dashboard','進度儀表板'],['histo
  }catch(e){alert('刪除失敗：'+e.message)}finally{button.disabled=false}
 }
 async function create(){let name=prompt('公司名稱（不得使用參考公司作為資料來源）');if(!name)return;let industry=prompt('產業別（選填）','')||'';let year=prompt('報導年度','2025')||'2025';try{let p=await api('/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,industry,year})});await init();$('projects').value=p.id;await load();tab('upload');msg('專案建立成功，下一步請上傳企業資料。')}catch(e){alert('建立專案失敗：'+e.message);msg(e.message)}}async function load(){current=Number($('projects').value);await refresh()}async function refresh(){if(!current)return;data=await api('/projects/'+current);render();tab(selected)}function render(){let c=data.checks,n=c.length,has=c.filter(x=>x.evidence).length,generated=c.filter(x=>x.generated).length,confirmed=c.filter(x=>x.confirmed).length;
-$('overview').innerHTML=`<div class="panel"><h2>${esc(data.project.name)}｜${esc(data.project.year)}</h2><p class="muted">產業：${esc(data.project.industry||'尚未設定')}。資料完整度與準則符合程度不可混用。</p><div class="stats"><div class="stat">參考架構項目<strong>${n}/${n}</strong><small>已建置章節，不代表已揭露</small></div><div class="stat">企業資料支持<strong>${has}/${n}</strong><small>僅為初步關鍵字分類，待人工審查</small></div><div class="stat">已人工確認<strong>${confirmed}/${n}</strong><small>準則符合程度：未評估</small></div></div><p>已生成可審閱內容：${generated}/${n}　｜　來源檔案：${data.sources.length}　｜　證據片段：${data.evidence.length}</p><button onclick="tab('upload')">上傳資料</button><button id="reportGenerateButton" onclick="generate()">一鍵 AI 生成整本永續專章</button><div id="reportProgress" role="status" aria-live="polite" class="muted">將依企業證據逐節撰寫完整報告段落、管理措施、指標／目標／績效表格與未來規劃；既有正文不覆寫。完成後可匯出整本 Word（含目錄、待補清單、來源及 IFRS 檢核附錄）。生成可能需要數分鐘，請勿重複點擊。</div><button class="alt" onclick="tab('checks')">檢查缺口</button><h3>匯出報告與補件清單</h3><button onclick="exportFile('docx')">Word</button><button class="alt" onclick="backupProject()">備份專案 ZIP</button><button onclick="exportFile('pdf')">PDF</button><button onclick="exportFile('xlsx')">Excel 缺口／來源</button><p class="muted">AI 依已解析的企業證據撰寫可編輯草稿，未有資料的章節會標示待補充；不代表 IFRS 合規，須人工核對。</p></div>`;
-$('upload').innerHTML=`<div class="panel"><h2>批次上傳企業資料</h2><p>支援 PDF（文字型）、DOCX、XLSX、TXT、CSV、MD。可一次選擇多份；掃描影像、舊版 DOC、PPTX 尚不支援。</p><input id="files" type="file" multiple accept=".pdf,.docx,.xlsx,.xlsm,.txt,.csv,.md"><button id="uploadButton" onclick="uploadFiles()">解析並分類</button><div id="uploadProgress" role="status" aria-live="polite"></div><p class="muted">來源檔案經 SHA-256 去重；解析後儲存原文片段、頁碼或工作表位置與分類信心。原始檔案保存至 PostgreSQL，並可下載；資料庫容量有限，請定期備份。</p></div><div class="panel"><h3>直接新增文字段落</h3><input id="textname" placeholder="來源名稱，例如：2025年氣候風險訪談"><textarea id="textbody" placeholder="貼上客戶訪談紀錄、文字敘述、數據說明等"></textarea><button onclick="addText()">儲存文字來源</button></div><div class="panel"><h3>已匯入檔案</h3>${data.sources.map(s=>`<div class="section"><b>#${s.id} ${esc(s.name)}</b><p class="muted">${esc(s.created)}</p><select id="srcstatus-${s.id}"><option value="yellow" ${s.status==='yellow'?'selected':''}>🟡 已上傳／待人工確認</option><option value="green" ${s.status==='green'?'selected':''}>🟢 人工已確認</option><option value="red" ${s.status==='red'?'selected':''}>🔴 有問題需修改</option></select><input id="srcnote-${s.id}" value="${esc(s.note)}" placeholder="審核備註或問題原因"><button onclick="saveSource(${s.id})">儲存燈號</button><button class="alt" onclick="window.location.href='/api/projects/'+current+'/sources/${s.id}/download'">下載原始檔</button><button class="alt" onclick="removeSource(${s.id})">刪除來源</button></div>`).join('')||'尚無檔案'}</div>`;
+$('overview').innerHTML=`<div class="panel"><h2>${esc(data.project.name)}｜${esc(data.project.year)}</h2><p class="muted">產業：${esc(data.project.industry||'尚未設定')}。資料完整度與準則符合程度不可混用。</p><div class="stats"><div class="stat">參考架構項目<strong>${n}/${n}</strong><small>已建置章節，不代表已揭露</small></div><div class="stat">企業資料支持<strong>${has}/${n}</strong><small>僅為初步關鍵字分類，待人工審查</small></div><div class="stat">已人工確認<strong>${confirmed}/${n}</strong><small>準則符合程度：未評估</small></div></div><p>已生成可審閱內容：${generated}/${n}　｜　來源檔案：${data.sources.length}　｜　證據片段：${data.evidence.length}</p><button onclick="tab('upload')">上傳資料</button><div class="row"><label for="chapterSelect">選擇撰寫範圍</label><select id="chapterSelect"><option value="1">第 1 章｜前言</option><option value="2">第 2 章｜治理</option><option value="3">第 3 章｜策略</option><option value="4">第 4 章｜風險管理</option><option value="5">第 5 章｜指標與目標</option><option value="all">整本（建議分章執行）</option></select><button id="reportGenerateButton" onclick="generate()">AI 分章撰寫／接續</button></div><div id="reportProgress" role="status" aria-live="polite" class="muted">將依企業證據逐節撰寫完整報告段落、管理措施、指標／目標／績效表格與未來規劃；既有正文不覆寫。完成後可匯出整本 Word（含目錄、待補清單、來源及 IFRS 檢核附錄）。生成可能需要數分鐘，請勿重複點擊。</div><button class="alt" onclick="tab('checks')">檢查缺口</button><h3>匯出報告與補件清單</h3><button onclick="exportFile('docx')">Word</button><button class="alt" onclick="backupProject()">備份專案 ZIP</button><button onclick="exportFile('pdf')">PDF</button><button onclick="exportFile('xlsx')">Excel 缺口／來源</button><p class="muted">AI 依已解析的企業證據撰寫可編輯草稿，未有資料的章節會標示待補充；不代表 IFRS 合規，須人工核對。</p></div>`;
+$('upload').innerHTML=`<div class="panel"><h2>批次上傳企業資料</h2><p>支援 PDF（文字型）、DOCX、XLSX、TXT、CSV、MD。可一次選擇多份，系統逐檔上傳，單一檔案失敗不影響其他檔案；掃描影像、舊版 DOC、PPTX 尚不支援。</p><input id="files" type="file" multiple accept=".pdf,.docx,.xlsx,.xlsm,.txt,.csv,.md"><button id="uploadButton" onclick="uploadFiles()">解析並分類</button><div id="uploadProgress" role="status" aria-live="polite"></div><p class="muted">來源檔案經 SHA-256 去重；解析後儲存原文片段、頁碼或工作表位置與分類信心。原始檔案保存至 PostgreSQL，並可下載；資料庫容量有限，請定期備份。</p></div><div class="panel"><h3>直接新增文字段落</h3><input id="textname" placeholder="來源名稱，例如：2025年氣候風險訪談"><textarea id="textbody" placeholder="貼上客戶訪談紀錄、文字敘述、數據說明等"></textarea><button onclick="addText()">儲存文字來源</button></div><div class="panel"><h3>已匯入檔案</h3>${data.sources.map(s=>`<div class="section"><b>#${s.id} ${esc(s.name)}</b><p class="muted">${esc(s.created)}</p><select id="srcstatus-${s.id}"><option value="yellow" ${s.status==='yellow'?'selected':''}>🟡 已上傳／待人工確認</option><option value="green" ${s.status==='green'?'selected':''}>🟢 人工已確認</option><option value="red" ${s.status==='red'?'selected':''}>🔴 有問題需修改</option></select><input id="srcnote-${s.id}" value="${esc(s.note)}" placeholder="審核備註或問題原因"><button onclick="saveSource(${s.id})">儲存燈號</button><button class="alt" onclick="window.location.href='/api/projects/'+current+'/sources/${s.id}/download'">下載原始檔</button><button class="alt" onclick="removeSource(${s.id})">刪除來源</button></div>`).join('')||'尚無檔案'}</div>`;
 let chapters='';for(let [ch,[title,subs]] of Object.entries(data.structure)){chapters+=`<div class="panel"><h2>${ch}｜${title}</h2>`;subs.forEach((sub,i)=>{let k=ch+'.'+(i+1),r=data.drafts[k],count=c.find(x=>x.key===k)?.evidence||0;chapters+=`<div class="section"><div class="row"><strong>${k} ${esc(sub)}</strong><span class="tag">證據 ${count}</span><span class="tag">${r?.confirmed?'已確認':'待審核'}</span></div><pre>${esc((r?.body||'[尚未生成]').slice(0,350))}</pre><button class="alt" onclick="viewSection('${k}')">閱讀全文</button><button class="alt" onclick="editSection('${k}')">編輯／確認</button></div>`});chapters+='</div>'}$('chapters').innerHTML=chapters;
 $('checks').innerHTML=`<div class="panel"><h2>專章架構檢查</h2><p>參考架構完整度：${n}/${n}（系統模板）｜企業資料支持：${has}/${n}｜已確認：${confirmed}/${n}｜<b>IFRS S1/S2 符合程度：未評估</b></p><div class="scroll"><table><thead><tr><th>統一章節／揭露項目</th><th>企業證據</th><th>已生成</th><th>待補充</th><th>人工判斷</th><th>準則狀態</th></tr></thead><tbody>${c.map(x=>`<tr><td>${x.key} ${esc(x.title)}</td><td>${x.evidence} 筆</td><td>${x.generated?'是':'否'}</td><td>${x.needs_data?'缺來源':'待確認適用性'}</td><td>${x.confirmed?'完成':'待審核'}</td><td>未確認適用條文</td></tr>`).join('')}</tbody></table></div><p class="muted">本頁只做架構與資料缺口檢查；IFRS 準則條文及產業適用性需要專業逐項判斷，不能以章節有文字判定合規。</p></div>`;
 $('sources').innerHTML=`<div class="panel"><h2>來源追溯與章節對應</h2><div class="scroll">${data.evidence.map(e=>`<div class="section"><strong>#${e.id} ${esc(e.filename)}</strong><p class="muted">${esc(e.location)}｜${e.category}｜信心 ${e.confidence}｜章節：${esc(e.sections.join(', ')||'未分類')}</p><pre>${esc(e.body.slice(0,500))}</pre><button class="alt" onclick="remap(${e.id})">修正章節對應</button><button class="alt" onclick="editEvidence(${e.id})">修改文字片段</button></div>`).join('')||'尚無證據'}</div></div>`}
@@ -34,24 +34,26 @@ async function watchJob(pid,jid,output){
 }
 async function uploadFiles(){
  if(uploadBusy)return;
- const input=$('files');const f=input?.files;
- if(!f?.length)return msg('請先選擇檔案');
- const pid=current,fd=new FormData();for(let x of f)fd.append('files',x);
- uploadBusy=true;const btn=$('uploadButton'),progress=$('uploadProgress');if(btn){btn.disabled=true;btn.textContent='正在上傳…'}
+ const files=Array.from($('files')?.files||[]);if(!files.length)return msg('請先選擇檔案');
+ const pid=current,progress=$('uploadProgress'),btn=$('uploadButton');uploadBusy=true;
+ btn.disabled=true;btn.textContent='正在逐檔上傳…';
+ const lines=[];
  try{
-  if(progress)progress.textContent='正在上傳並保存原始檔案…';
-  const r=await api('/projects/'+pid+'/upload',{method:'POST',body:fd});
-  const jobs=r.results.filter(x=>x.job_id);
-  const skipped=r.results.filter(x=>!x.job_id).map(x=>x.file+'：'+x.status).join('；');
-  if(progress)progress.textContent=skipped||'文件已儲存，正在背景解析…';
-  const outcomes=await Promise.all(jobs.map(async x=>({file:x.file,...await watchJob(pid,x.job_id,progress)})));
-  const messages=outcomes.map(x=>x.file+'：'+x.message).join('；');
-  if(progress)progress.textContent=[skipped,messages].filter(Boolean).join('；');
+  // 逐檔送出：避免一次大請求超過 Render 的 40MB 限制，也讓單一失敗不影響其他檔案。
+  for(let i=0;i<files.length;i++){
+   const f=files[i];progress.textContent=`上傳 ${i+1}/${files.length}：${f.name}\n`+lines.join('\n');
+   const fd=new FormData();fd.append('files',f);
+   try{
+    const r=await api('/projects/'+pid+'/upload',{method:'POST',body:fd});
+    const item=r.results?.[0];lines.push(`${f.name}：${item?.status||'已送出'}`);
+   }catch(e){lines.push(`${f.name}：失敗 - ${e.message}`)}
+  }
+  progress.textContent=lines.join('\n')+'\n已送出解析工作，稍後可重新整理查看證據數量。';
   if(current===pid)await refresh();
-  msg(outcomes.some(x=>x.status==='error')?'部分文件解析失敗，請查看上方說明':'文件處理已完成');
- }catch(e){if(progress)progress.textContent='處理失敗：'+e.message;msg(e.message)}
- finally{uploadBusy=false;const b=$('uploadButton');if(b){b.disabled=false;b.textContent='解析並分類'}}
+  msg('批次上傳已送出，解析在背景進行；不必停留此頁等待。');
+ }finally{uploadBusy=false;const b=$('uploadButton');if(b){b.disabled=false;b.textContent='解析並分類'}}
 }
+
 let reportBusy=false;
 async function generate(){
  if(reportBusy)return;
@@ -62,7 +64,8 @@ async function generate(){
  if(progress)progress.textContent='正在啟動 AI 報告撰寫，請稍候…';
  try{
   const pid=current;
-  const r=await api('/projects/'+pid+'/report/start',{method:'POST'});
+  const chapter=document.getElementById('chapterSelect')?.value||'1';
+  const r=await api('/projects/'+pid+'/report/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chapter:chapter==='all'?null:chapter})});
   for(let i=0;i<450;i++){
    await new Promise(resolve=>setTimeout(resolve,2000));
    const job=await api('/projects/'+pid+'/jobs/'+r.job_id);
@@ -74,11 +77,20 @@ async function generate(){
   }
   throw Error('等待超過 15 分鐘，請查看 Render Logs；已生成的章節不會自動刪除。');
  }catch(e){msg('AI 生成失敗：'+e.message);if(progress)progress.textContent='失敗：'+e.message;}
- finally{reportBusy=false;if(btn){btn.disabled=false;btn.textContent='一鍵 AI 生成整本永續專章';}}
+ finally{reportBusy=false;if(btn){btn.disabled=false;btn.textContent='AI 分章撰寫／接續';}}
 }function exportFile(fmt){window.location.href='/api/projects/'+current+'/export/'+fmt}async function editSection(k){let r=data.drafts[k]||{};let body=prompt('修改本節文字（按確定後儲存；請自行核對來源）',r.body||'');if(body===null)return;let confirmed=confirm('是否標示為「已人工確認」？\n請先確認內容與來源、適用性、期間與數值一致。');await api('/projects/'+current+'/sections/'+k,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({body,confirmed})});await refresh();tab('chapters')}async function remap(id){let e=data.evidence.find(x=>x.id===id);let s=prompt('以逗號分隔章節編號，例如 3.1,4.3',e.sections.join(','));if(s===null)return;await api('/projects/'+current+'/evidence/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({sections:s.split(',').map(x=>x.trim())})});await refresh();tab('sources')}
 
 async function saveSource(id){try{await api('/projects/'+current+'/sources/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:$('srcstatus-'+id).value,note:$('srcnote-'+id).value})});msg('文件狀態已儲存');await refresh()}catch(e){alert(e.message)}}
-async function removeSource(id){if(!confirm('確定刪除來源及其證據片段？既有草稿不會自動清除。'))return;try{await api('/projects/'+current+'/sources/'+id,{method:'DELETE'});await refresh();msg('來源已刪除，請檢查既有草稿及條文引用')}catch(e){alert(e.message)}}
+async function removeSource(id){
+ if(!confirm('確定刪除來源及其證據片段？既有草稿不會自動清除。'))return;
+ const pid=current,button=document.activeElement;if(button){button.disabled=true;button.textContent='刪除中…'}
+ try{
+  await api('/projects/'+pid+'/sources/'+id,{method:'DELETE'});
+  // 先在畫面移除檔案，避免重新下載整份專案資料造成操作卡頓。
+  if(current===pid&&data){data.sources=data.sources.filter(s=>s.id!==id);data.evidence=data.evidence.filter(e=>e.source!==id);render();tab('upload')}
+  msg('來源已刪除；草稿中引用過的文字請人工複核。');
+ }catch(e){if(button){button.disabled=false;button.textContent='刪除來源'}alert(e.message)}
+}
 async function addText(){let body=$('textbody').value.trim();if(!body)return alert('請輸入文字');try{await api('/projects/'+current+'/text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('textname').value,body})});await refresh();msg('文字已新增，預設黃燈')}catch(e){alert(e.message)}}
 async function editEvidence(id){let e=data.evidence.find(x=>x.id===id);let body=prompt('編輯文字片段（綠燈來源需先改黃燈）',e.body);if(body===null)return;try{await api('/projects/'+current+'/evidence/'+id+'/text',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({body})});await refresh();msg('文字已更新')}catch(e){alert(e.message)}}
 

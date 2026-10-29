@@ -293,7 +293,7 @@ def _report_progress(c, job_id, percent, message):
  c.execute('UPDATE processing_jobs SET status=?,progress=?,message=?,updated=? WHERE id=?',('processing',percent,message,datetime.datetime.now().isoformat(),job_id))
  c.commit()
 
-def _process_report(job_id,pid):
+def _process_report(job_id,pid,chapter=None):
  """Generate one subsection at a time, committing each result for resumability."""
  c=None
  try:
@@ -304,8 +304,8 @@ def _process_report(job_id,pid):
   rows=[dict(x) for x in c.execute('SELECT e.id,e.location,e.body,e.sections,s.name filename FROM evidence e JOIN sources s ON s.id=e.source WHERE e.project=? ORDER BY e.id',(pid,))]
   if not rows:raise ValueError('沒有可解析的企業證據，請先上傳文件')
   from report_writer import write_full_report
-  write_full_report(c,p,rows,job_id,_report_progress,generate_json)
-  c.execute('UPDATE processing_jobs SET status=?,progress=?,message=?,updated=? WHERE id=?',('done',100,'整本專章已處理完成；請逐節核對並匯出 Word',datetime.datetime.now().isoformat(),job_id));c.commit()
+  write_full_report(c,p,rows,job_id,_report_progress,generate_json,chapter=chapter)
+  c.execute('UPDATE processing_jobs SET status=?,progress=?,message=?,updated=? WHERE id=?',('done',100,('第 '+str(chapter)+' 章已處理完成' if chapter else '整本專章已處理完成')+'；請逐節核對並匯出 Word',datetime.datetime.now().isoformat(),job_id));c.commit()
  except Exception as exc:
   app.logger.exception('Full-book AI report generation failed')
   if c:
@@ -320,14 +320,18 @@ def report_start(pid):
  c=conn()
  if not project(c,pid):return jsonify(error='找不到公司專案'),404
  if not c.execute('SELECT 1 FROM evidence WHERE project=? LIMIT 1',(pid,)).fetchone():return jsonify(error='尚無已解析的證據資料。請先上傳文件並等待解析完成。'),400
+ chapter=(request.get_json(silent=True) or {}).get('chapter')
+ if chapter is not None:
+  chapter=str(chapter)
+  if chapter not in SECTIONS:return jsonify(error='章節編號不正確'),400
  cutoff=(datetime.datetime.now()-datetime.timedelta(minutes=7)).isoformat()
  c.execute("UPDATE processing_jobs SET status='error',message='處理程序可能已中斷，請重新執行整本生成' WHERE project=? AND kind='report' AND status IN ('queued','processing') AND updated<?",(pid,cutoff));c.commit()
  running=c.execute("SELECT id FROM processing_jobs WHERE project=? AND kind='report' AND status IN ('queued','processing') ORDER BY id DESC LIMIT 1",(pid,)).fetchone()
  if running:return jsonify(job_id=running['id'],status='processing'),202
  now=datetime.datetime.now().isoformat()
- j=c.execute('INSERT INTO processing_jobs(project,kind,status,progress,message,created,updated) VALUES(?,?,?,?,?,?,?) RETURNING id',(pid,'report','queued',0,'已開始準備 AI 撰寫',now,now));jid=j.fetchone()['id'];c.commit()
- _pool.submit(_process_report,jid,pid)
- return jsonify(job_id=jid,status='queued'),202
+ j=c.execute('INSERT INTO processing_jobs(project,kind,status,progress,message,created,updated) VALUES(?,?,?,?,?,?,?) RETURNING id',(pid,'report','queued',0,'準備撰寫第 '+str(chapter)+' 章' if chapter else '已開始準備 AI 撰寫',now,now));jid=j.fetchone()['id'];c.commit()
+ _pool.submit(_process_report,jid,pid,chapter)
+ return jsonify(job_id=jid,status='queued',chapter=chapter),202
 
 @app.post('/api/projects/<int:pid>/generate')
 def gen(pid):
