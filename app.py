@@ -297,8 +297,8 @@ def _process_report(job_id,pid,chapter=None):
  """Generate one subsection at a time, committing each result for resumability."""
  c=None
  try:
-  from gemini_client import generate_json
-  if not os.getenv('GEMINI_API_KEY'):raise ValueError('尚未設定 GEMINI_API_KEY')
+  from ai_provider import generate_json
+  if os.getenv('AI_PROVIDER','gemini').strip().lower()=='gemini' and not os.getenv('GEMINI_API_KEY'):raise ValueError('尚未設定 GEMINI_API_KEY')
   c=db(DB);p=project(c,pid)
   if not p:raise ValueError('公司專案不存在')
   rows=[dict(x) for x in c.execute('SELECT e.id,e.location,e.body,e.sections,s.name filename FROM evidence e JOIN sources s ON s.id=e.source WHERE e.project=? ORDER BY e.id',(pid,))]

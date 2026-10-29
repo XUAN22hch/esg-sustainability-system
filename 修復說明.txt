@@ -1,0 +1,3 @@
+V7.3.1 修正：原 V7.3 的整章生成路徑仍直接匯入 gemini_client，導致 Groq 備援未啟動。已改為使用 ai_provider。
+請將 app.py、ai_provider.py 上傳 GitHub 專案根目錄並 Commit，確認 Render Live。環境變數 AI_PROVIDER=gemini、AI_FALLBACK_PROVIDER=groq、GROQ_API_KEY、GROQ_MODEL。
+原始資料庫與已儲存草稿不會被此更新檔直接修改。尚未於實際 Render 環境驗證。
