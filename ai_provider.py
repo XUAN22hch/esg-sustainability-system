@@ -1,21 +1,55 @@
 """AI provider router: Gemini, optional Groq, optional remotely reachable Ollama.
 No API key or enterprise document is logged. Never silently transfer to fallback.
 """
-import json, os, urllib.request, urllib.error
+import json, os, urllib.request, urllib.error, re
 from gemini_client import generate_json as gemini_generate, GeminiError
 
 class ProviderError(RuntimeError): pass
 
-def _json_reply(url, payload, headers, timeout):
-    req=urllib.request.Request(url, data=json.dumps(payload,ensure_ascii=False).encode(),headers={'Content-Type':'application/json',**headers},method='POST')
+def _safe_error_detail(raw):
+    """Show provider error metadata without exposing credentials or document text."""
     try:
-        with urllib.request.urlopen(req,timeout=timeout) as r:return json.load(r)
+        data = json.loads(raw)
+        err = data.get('error', data) if isinstance(data, dict) else {}
+        if isinstance(err, dict):
+            code = str(err.get('code') or err.get('type') or '')
+            message = str(err.get('message') or '')
+            detail = ('[%s] ' % code if code else '') + message
+        else:
+            detail = ''
+    except (ValueError, TypeError):
+        detail = ''
+    # Never display raw HTML/proxy responses or echo request data.
+    if not detail:
+        return '服務端未提供可辨識的 JSON 錯誤訊息'
+    detail = re.sub(r'gsk_[A-Za-z0-9_-]+', '[已隱藏金鑰]', detail)
+    detail = re.sub(r'(?i)(bearer\s+)\S+', r'\1[已隱藏]', detail)
+    return detail[:300]
+
+
+def _json_reply(url, payload, headers, timeout):
+    req = urllib.request.Request(
+        url, data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+        headers={'Content-Type': 'application/json', **headers}, method='POST'
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
     except urllib.error.HTTPError as e:
-        try: detail=json.loads(e.read(1500)).get('error',{}).get('message','')
-        except Exception: detail=''
-        raise ProviderError('AI 服務 HTTP %s：%s'%(e.code,detail[:200])) from e
-    except (urllib.error.URLError,TimeoutError) as e:
-        raise ProviderError('備援 AI 連線失敗；已完成的草稿不受影響。') from e
+        try:
+            raw = e.read(4096).decode('utf-8', errors='replace')
+        except Exception:
+            raw = ''
+        detail = _safe_error_detail(raw)
+        request_id = e.headers.get('x-request-id', '')
+        request_id = re.sub(r'[^A-Za-z0-9_-]', '', request_id)[:80]
+        provider = 'Groq' if 'api.groq.com' in url else 'AI'
+        model = str(payload.get('model', ''))[:90]
+        suffix = ('；request_id=' + request_id) if request_id else ''
+        raise ProviderError('%s HTTP %s（模型：%s）：%s%s' %
+                            (provider, e.code, model, detail, suffix)) from None
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise ProviderError('AI 連線失敗，請稍後重試；已完成的草稿不受影響。') from None
 
 def _parse(raw):
     raw=raw.strip()
