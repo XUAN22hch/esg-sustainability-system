@@ -28,6 +28,13 @@ def close_db(error=None):
   try:c.close()
   except Exception:pass
 def project(c,p):return c.execute('SELECT * FROM projects WHERE id=?',(p,)).fetchone()
+
+@app.post('/api/ai/connection-test')
+def ai_connection_test():
+ """Authenticated, fixed-prompt diagnostic; never sends project data."""
+ from ai_connection_diagnostic import test_groq
+ return jsonify(test_groq())
+
 @app.get('/')
 def home():return render_template_string(open(os.path.join(ROOT,'index.html'),encoding='utf-8').read())
 def ensure_compliance(c):
@@ -297,8 +304,8 @@ def _process_report(job_id,pid,chapter=None):
  """Generate one subsection at a time, committing each result for resumability."""
  c=None
  try:
-  from ai_provider import generate_json
-  if os.getenv('AI_PROVIDER','gemini').strip().lower()=='gemini' and not os.getenv('GEMINI_API_KEY'):raise ValueError('尚未設定 GEMINI_API_KEY')
+  from gemini_client import generate_json
+  if not os.getenv('GEMINI_API_KEY'):raise ValueError('尚未設定 GEMINI_API_KEY')
   c=db(DB);p=project(c,pid)
   if not p:raise ValueError('公司專案不存在')
   rows=[dict(x) for x in c.execute('SELECT e.id,e.location,e.body,e.sections,s.name filename FROM evidence e JOIN sources s ON s.id=e.source WHERE e.project=? ORDER BY e.id',(pid,))]
