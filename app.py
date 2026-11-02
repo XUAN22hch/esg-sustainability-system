@@ -528,8 +528,10 @@ def _worker_auth():
 @app.errorhandler(500)
 def local_worker_error(error):
  if request.path.startswith('/api/local-worker/'):
-  app.logger.exception('Local worker endpoint failed: %s',request.path,exc_info=error.original_exception if hasattr(error,'original_exception') else error)
-  return jsonify(error='Local worker server error. See Render logs.'),500
+  original=getattr(error,'original_exception',None)
+  app.logger.error('Local worker endpoint failed: %s',request.path,exc_info=(type(original),original,original.__traceback__) if original else True)
+  # Authenticated worker gets only exception type; never leak SQL, credentials or project content.
+  return jsonify(error='Local worker server error',error_type=type(original).__name__ if original else 'UnknownError'),500
  return error
 
 @app.get('/api/local-worker/task')
