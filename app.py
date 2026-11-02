@@ -525,6 +525,13 @@ def _worker_auth():
  secret=os.environ.get('LOCAL_OLLAMA_TOKEN','')
  return bool(secret and secrets.compare_digest(request.headers.get('Authorization','').removeprefix('Bearer ').strip(),secret))
 
+@app.errorhandler(500)
+def local_worker_error(error):
+ if request.path.startswith('/api/local-worker/'):
+  app.logger.exception('Local worker endpoint failed: %s',request.path,exc_info=error.original_exception if hasattr(error,'original_exception') else error)
+  return jsonify(error='Local worker server error. See Render logs.'),500
+ return error
+
 @app.get('/api/local-worker/task')
 def local_worker_task():
  if not _worker_auth():return jsonify(error='Unauthorized'),401
