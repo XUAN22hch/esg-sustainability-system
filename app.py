@@ -336,7 +336,7 @@ def report_start(pid):
  if chapter is not None:
   chapter=str(chapter)
   if chapter not in SECTIONS:return jsonify(error='章節編號不正確'),400
- cutoff=(datetime.datetime.now()-datetime.timedelta(minutes=7)).isoformat()
+ cutoff=(datetime.datetime.now()-datetime.timedelta(minutes=90)).isoformat()
  c.execute("UPDATE processing_jobs SET status='error',message='處理程序可能已中斷，請重新執行整本生成' WHERE project=? AND kind='report' AND status IN ('queued','processing') AND updated<?",(pid,cutoff));c.commit()
  running=c.execute("SELECT id FROM processing_jobs WHERE project=? AND kind='report' AND status IN ('queued','processing') ORDER BY id DESC LIMIT 1",(pid,)).fetchone()
  if running:return jsonify(job_id=running['id'],status='processing'),202
