@@ -538,7 +538,7 @@ def local_worker_error(error):
 def local_worker_task():
  if not _worker_auth():return jsonify(error='Unauthorized'),401
  c=conn()
- job=c.execute("SELECT * FROM processing_jobs WHERE kind='report' AND status IN ('queued','processing') AND message LIKE '本機%' ORDER BY id LIMIT 1").fetchone()
+ job=c.execute("SELECT * FROM processing_jobs WHERE kind='report' AND status IN ('queued','processing') AND message LIKE '本機%%' ORDER BY id LIMIT 1").fetchone()
  if not job:return jsonify(task=None)
  p=project(c,job['project'])
  if not p:return jsonify(task=None)
@@ -586,7 +586,7 @@ def local_worker_result():
  if not isinstance(jid,int) or not isinstance(cursor,int) or not isinstance(key,str) or not isinstance(body,str) or len(body)>100000:
   return jsonify(error='Invalid payload'),400
  c=conn()
- job=c.execute("SELECT * FROM processing_jobs WHERE id=? AND kind='report' AND status IN ('queued','processing') AND message LIKE '本機%'",(jid,)).fetchone()
+ job=c.execute("SELECT * FROM processing_jobs WHERE id=? AND kind='report' AND status IN ('queued','processing') AND message LIKE '本機%%'",(jid,)).fetchone()
  if not job:return jsonify(error='Job not found'),409
  p=project(c,job['project'])
  all_sections=[(f'{ch}.{i}',ch,heading,title) for ch,(heading,subs) in SECTIONS.items() for i,title in enumerate(subs,1)]
