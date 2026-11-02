@@ -538,7 +538,7 @@ def local_worker_task():
  # A job may target one chapter; stored in the message.
  initial=job['message']
  import re
- match=re.search(r'第([1-5])章',initial)
+ match=re.search(r'第\s*([1-5])\s*章',initial)
  if match:all_sections=[x for x in all_sections if x[1]==match.group(1)]
  cursor=int(re.search(r'進度 (\d+)/',initial).group(1)) if re.search(r'進度 (\d+)/',initial) else 0
  if cursor>=len(all_sections):
@@ -582,7 +582,7 @@ def local_worker_result():
  p=project(c,job['project'])
  all_sections=[(f'{ch}.{i}',ch,heading,title) for ch,(heading,subs) in SECTIONS.items() for i,title in enumerate(subs,1)]
  import re
- match=re.search(r'第([1-5])章',job['message'])
+ match=re.search(r'第\s*([1-5])\s*章',job['message'])
  if match:all_sections=[x for x in all_sections if x[1]==match.group(1)]
  current=int(re.search(r'進度 (\d+)/',job['message']).group(1)) if re.search(r'進度 (\d+)/',job['message']) else 0
  if current!=cursor or current>=len(all_sections) or all_sections[current][0]!=key:return jsonify(error='Out of order'),409
