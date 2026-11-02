@@ -14,13 +14,52 @@ def request_json(url,method="GET",payload=None,auth=False,timeout=60):
  if auth:headers["Authorization"]="Bearer "+TOKEN
  req=urllib.request.Request(url,data=data,headers=headers,method=method)
  with urllib.request.urlopen(req,timeout=timeout) as res:return json.load(res)
+def _extract_body(answer):
+ answer=(answer or "").strip()
+ if not answer:
+  return None
+ try:
+  obj=json.loads(answer)
+  if isinstance(obj,dict):
+   body=obj.get("body")
+   if isinstance(body,str) and body.strip():
+    return body.strip()
+   for key in ("content","text","response"):
+    val=obj.get(key)
+    if isinstance(val,str) and val.strip():
+     return val.strip()
+  if isinstance(obj,str) and obj.strip():
+   return obj.strip()
+ except (json.JSONDecodeError,TypeError):
+  pass
+ if answer.startswith("```"):
+  answer=answer.strip("`").removeprefix("json").strip()
+  try:
+   obj=json.loads(answer)
+   if isinstance(obj,dict) and isinstance(obj.get("body"),str):
+    return obj["body"].strip() or None
+  except (json.JSONDecodeError,TypeError):
+   pass
+ # Do not store broken JSON as a draft.
+ if answer.startswith("{") or answer.startswith("["):
+  return None
+ return answer if len(answer)>=25 else None
+
 def generate(prompt):
- result=request_json(OLLAMA+"/api/generate","POST",{"model":MODEL,"prompt":prompt,"stream":False,"format":"json","options":{"temperature":0.15,"num_predict":1600}},timeout=600)
- answer=result.get("response","")
- obj=json.loads(answer)
- body=obj.get("body")
- if not isinstance(body,str) or not body.strip():raise ValueError("Ollama 未回傳有效的 body")
- return body
+ # Use a JSON schema rather than unconstrained JSON; 3B models sometimes omit body.
+ schema={"type":"object","properties":{"body":{"type":"string"}},"required":["body"]}
+ for attempt in range(3):
+  options={"temperature":0.1,"num_predict":2400+attempt*800,"num_ctx":4096}
+  payload={"model":MODEL,"prompt":prompt,"stream":False,"format":schema,"options":options}
+  result=request_json(OLLAMA+"/api/generate","POST",payload,timeout=900)
+  answer=result.get("response","")
+  body=_extract_body(answer)
+  if body and not result.get("done_reason")=="length":
+   return body
+  print("Ollama response invalid or truncated; retry",attempt+1,"/3",flush=True)
+  prompt=prompt+"\\nIMPORTANT: Return exactly one JSON object with a nonempty string field named body. No other fields."
+ raise ValueError("Ollama did not return a complete body after 3 attempts")
+
 print("已連接本機 Ollama 工作程式；請保持此視窗開啟。",flush=True)
 while True:
  try:
