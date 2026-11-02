@@ -341,7 +341,7 @@ def report_start(pid):
  running=c.execute("SELECT id FROM processing_jobs WHERE project=? AND kind='report' AND status IN ('queued','processing') ORDER BY id DESC LIMIT 1",(pid,)).fetchone()
  if running:return jsonify(job_id=running['id'],status='processing'),202
  now=datetime.datetime.now().isoformat()
- j=c.execute('INSERT INTO processing_jobs(project,kind,status,progress,message,created,updated) VALUES(?,?,?,?,?,?,?) RETURNING id',(pid,'report','queued',0,'準備撰寫第 '+str(chapter)+' 章' if chapter else '已開始準備 AI 撰寫',now,now));jid=j.fetchone()['id'];c.commit()
+ j=c.execute('INSERT INTO processing_jobs(project,kind,status,progress,message,created,updated) VALUES(?,?,?,?,?,?,?) RETURNING id',(pid,'report','queued',0,(('本機 Ollama：第'+str(chapter)+'章' if chapter else '本機 Ollama：整本專章') if os.environ.get('LOCAL_OLLAMA_TOKEN') else ('準備撰寫第 '+str(chapter)+' 章' if chapter else '已開始準備 AI 撰寫')),now,now));jid=j.fetchone()['id'];c.commit()
  if not os.environ.get('LOCAL_OLLAMA_TOKEN'):
   _pool.submit(_process_report,jid,pid,chapter)
  return jsonify(job_id=jid,status='queued',chapter=chapter),202
